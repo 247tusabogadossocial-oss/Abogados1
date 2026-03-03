@@ -107,7 +107,12 @@ res.json = (body: any) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
+    const isWebhookPath =
+      path === "/retell-webhook" ||
+      path === "/webhook" ||
+      path === "/api/retell-webhook" ||
+      path === "/api/webhook";
+    if (path.startsWith("/api") || isWebhookPath) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;

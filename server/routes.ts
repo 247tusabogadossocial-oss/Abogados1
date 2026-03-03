@@ -8,7 +8,6 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   sendAttorneyAssignmentEmail,
   sendAttorneyDecisionEmail,
-  sendNewCallAlertEmail,
 } from "./mailer";
 import { openrouter } from "./services/ai";
 import { convexClient } from "./convexClient";
@@ -136,6 +135,10 @@ function isAnalyzedEvent(e: string) {
   return e === "call_analyzed" || e === "call.analyzed";
 }
 
+function isTranscriptEvent(e: string) {
+  return e === "transcript_updated" || e === "transcript.updated";
+}
+
 function isFinalEvent(e: string) {
   return (
     e === "call_completed" ||
@@ -152,25 +155,6 @@ function isInboundEvent(e: string) {
 function normalizeDirection(value: any): string | undefined {
   const direction = String(value ?? "").trim().toLowerCase();
   return direction || undefined;
-}
-
-const recentNewCallAlertIds = new Map<string, number>();
-const NEW_CALL_ALERT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
-
-function hasRecentNewCallAlert(callId: string): boolean {
-  const now = Date.now();
-  recentNewCallAlertIds.forEach((ts, cachedCallId) => {
-    if (now - ts > NEW_CALL_ALERT_CACHE_TTL_MS) {
-      recentNewCallAlertIds.delete(cachedCallId);
-    }
-  });
-
-  const sentAt = recentNewCallAlertIds.get(callId);
-  return typeof sentAt === "number" && now - sentAt <= NEW_CALL_ALERT_CACHE_TTL_MS;
-}
-
-function rememberNewCallAlert(callId: string) {
-  recentNewCallAlertIds.set(callId, Date.now());
 }
 
 function mapStatusFromAnalysis(
@@ -1690,7 +1674,12 @@ ${JSON.stringify(callsData, null, 2)}
     const payload = req.body || {};
     const payloadData = payload.data || {};
     const event = normalizeEvent(
-      payload.event || payload.type || payloadData.event || payloadData.type
+      payload.event ||
+        payload.event_type ||
+        payload.type ||
+        payloadData.event ||
+        payloadData.event_type ||
+        payloadData.type
     );
     const inbound = payload.call_inbound || payloadData.call_inbound || payloadData || {};
     const quickCall = payload.call || payloadData.call || {};
@@ -1707,6 +1696,22 @@ ${JSON.stringify(callsData, null, 2)}
       payloadData.call?.call_id,
       payloadData.call?.callId,
       payloadData.call?.id
+    );
+    const quickFromNumber = pickFirstString(
+      quickCall.from_number,
+      quickCall.fromNumber,
+      inbound.from_number,
+      inbound.fromNumber,
+      payloadData.from_number,
+      payloadData.fromNumber,
+      payload.from_number,
+      payload.fromNumber
+    );
+
+    console.log(
+      `[RETELL] incoming webhook method=${req.method} path=${req.path} event=${event || "unknown"} callId=${
+        quickCallId || "none"
+      } from=${quickFromNumber || "none"} contentType=${req.get("content-type") || "unknown"}`
     );
 
     try {
@@ -1767,69 +1772,13 @@ ${JSON.stringify(callsData, null, 2)}
               payload.toNumber
             ) ?? "";
 
-          let persistedInbound:
-            | {
-                placeholder: any;
-                linkedLeadId?: number;
-              }
-            | undefined;
-
           if (fromNumber) {
-            persistedInbound = await persistInboundPlaceholderAndLead({
+            await persistInboundPlaceholderAndLead({
               fromNumber,
               toNumber: toNumber || undefined,
               sourceEvent: event,
               createdAt: Date.now(),
             });
-          }
-
-          if (!fromNumber) return;
-
-          try {
-            const placeholder =
-              persistedInbound?.placeholder ??
-              (
-                await persistInboundPlaceholderAndLead({
-                  fromNumber,
-                  toNumber: toNumber || undefined,
-                  sourceEvent: event,
-                  createdAt: Date.now(),
-                })
-              ).placeholder;
-
-            const inboundAlertSent =
-              typeof (placeholder as any)?.newCallAlertSentAt === "number" ||
-              hasRecentNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
-
-            if (!inboundAlertSent) {
-              try {
-                await sendNewCallAlertEmail({
-                  to: "247tusabogadossocial@gmail.com",
-                  retellCallId: String((placeholder as any)?.retellCallId ?? ""),
-                  phoneNumber: fromNumber,
-                  receivedAt: (placeholder as any)?.createdAt ?? Date.now(),
-                });
-                rememberNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
-                await storage.updateCallLogByRetellCallId(
-                  String((placeholder as any)?.retellCallId ?? ""),
-                  {
-                    newCallAlertSentAt: Date.now(),
-                  } as any
-                );
-              } catch (alertErr: any) {
-                console.error(
-                  `[RETELL] inbound new call email alert failed from=${fromNumber}: ${
-                    alertErr?.message ?? "unknown"
-                  }`
-                );
-              }
-            }
-          } catch (inboundErr: any) {
-            console.error(
-              `[RETELL] inbound webhook background persistence failed from=${fromNumber}: ${
-                inboundErr?.message ?? "unknown"
-              }`
-            );
           }
 
           return;
@@ -1937,7 +1886,7 @@ ${JSON.stringify(callsData, null, 2)}
 
         const shouldTryRetellLookup =
           !!callId &&
-          (isAnalyzedEvent(event) || isFinalEvent(event)) &&
+          (isAnalyzedEvent(event) || isFinalEvent(event) || isTranscriptEvent(event)) &&
           !provisionalRecordingUrl;
 
         const retellCallDetails = shouldTryRetellLookup
@@ -2007,6 +1956,7 @@ ${JSON.stringify(callsData, null, 2)}
         const looksProcessable =
           isAnalyzedEvent(event) ||
           isFinalEvent(event) ||
+          isTranscriptEvent(event) ||
           !!recordingUrl ||
           transcript.trim().length > 0 ||
           Object.keys(analysis || {}).length > 0;
@@ -2196,43 +2146,6 @@ ${JSON.stringify(callsData, null, 2)}
           analysis: analysis as any,
         });
 
-        const alertAlreadySent =
-          typeof (existingCall as any)?.newCallAlertSentAt === "number" ||
-          hasRecentNewCallAlert(callId);
-
-        if (!alertAlreadySent) {
-          try {
-            await sendNewCallAlertEmail({
-              to: "247tusabogadossocial@gmail.com",
-              retellCallId: callId,
-              phoneNumber,
-              caseType,
-              location,
-              summary: summaryText,
-              receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
-            });
-            rememberNewCallAlert(callId);
-
-            try {
-              await storage.updateCallLogByRetellCallId(callId, {
-                newCallAlertSentAt: Date.now(),
-              } as any);
-            } catch (markErr: any) {
-              console.warn(
-                `[RETELL] could not persist new call alert flag for callId=${callId}: ${
-                  markErr?.message ?? "unknown"
-                }`
-              );
-            }
-          } catch (alertErr: any) {
-            console.error(
-              `[RETELL] new call email alert failed for callId=${callId}: ${
-                alertErr?.message ?? "unknown"
-              }`
-            );
-          }
-        }
-
         console.log(
           `[RETELL] processed callId=${callId} hasRecording=${Boolean(
             recordingUrl
@@ -2280,17 +2193,25 @@ ${JSON.stringify(callsData, null, 2)}
             } as any);
           }
         }
+        const currentLeadName = safeString((existing as any)?.name).trim();
+        const currentLeadPhone = safeString((existing as any)?.phone).trim();
+        const currentLeadCaseType = safeString((existing as any)?.caseType).trim();
+        const currentLeadUrgency = safeString((existing as any)?.urgency).trim();
 
-        if (!isValidCall) {
-          return;
-        }
+        const resolvedLeadName = !isFakeName
+          ? leadName
+          : currentLeadName || fallbackLeadName;
+        const resolvedPhone = phoneNumber || currentLeadPhone || "Sin numero";
+        const resolvedCaseType = caseType || currentLeadCaseType || fallbackCaseType || "General";
+        const resolvedUrgency =
+          safeString(cad.urgency).trim() || currentLeadUrgency || fallbackUrgency || "Medium";
 
         const leadPayload = {
           retellCallId: callId,
-          name: leadName,
-          phone: phoneNumber || "Sin numero",
-          caseType: caseType || "General",
-          urgency: safeString(cad.urgency, "Medium"),
+          name: resolvedLeadName,
+          phone: resolvedPhone,
+          caseType: resolvedCaseType,
+          urgency: resolvedUrgency,
           transcript,
           summary: summaryText,
           status: mapStatusFromAnalysis(analysis),
@@ -2312,6 +2233,12 @@ ${JSON.stringify(callsData, null, 2)}
         await storage.updateCallLogByRetellCallId(callId, {
           leadId,
         });
+
+        if (!isValidCall) {
+          console.log(
+            `[RETELL] call kept in CRM without qualification callId=${callId} fakeName=${isFakeName} hasConversation=${hasConversation} isSuccessful=${isSuccessful}`
+          );
+        }
       } catch (err) {
         console.error("[RETELL] background webhook error:", err);
       }

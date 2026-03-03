@@ -203,24 +203,6 @@ export const updateCallStatus = mutation({
   },
 });
 
-export const markNewCallAlertSent = mutation({
-  args: {
-    retellCallId: v.string(),
-    sentAt: v.optional(v.number()),
-  },
-  handler: async (ctx, { retellCallId, sentAt }) => {
-    const existing = await findCallLogByRetellCallId(ctx, retellCallId);
-    if (!existing) return false;
-    if (typeof (existing as any).newCallAlertSentAt === "number") return false;
-
-    await ctx.db.patch(existing._id, {
-      newCallAlertSentAt: sentAt ?? Date.now(),
-    });
-
-    return true;
-  },
-});
-
 export const upsertInboundPlaceholder = mutation({
   args: {
     fromNumber: v.string(),
