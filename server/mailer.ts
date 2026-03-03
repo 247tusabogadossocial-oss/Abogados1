@@ -222,6 +222,10 @@ export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
     </div>
   `;
 
+  console.log("[MAIL] sending new call alert...");
+  console.log("[MAIL] from:", from);
+  console.log("[MAIL] to:", to);
+
   const info = await transporter.sendMail({
     from,
     to,

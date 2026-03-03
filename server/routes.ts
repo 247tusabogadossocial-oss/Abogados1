@@ -145,6 +145,25 @@ function isFinalEvent(e: string) {
   );
 }
 
+const recentNewCallAlertIds = new Map<string, number>();
+const NEW_CALL_ALERT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+
+function hasRecentNewCallAlert(callId: string): boolean {
+  const now = Date.now();
+  recentNewCallAlertIds.forEach((ts, cachedCallId) => {
+    if (now - ts > NEW_CALL_ALERT_CACHE_TTL_MS) {
+      recentNewCallAlertIds.delete(cachedCallId);
+    }
+  });
+
+  const sentAt = recentNewCallAlertIds.get(callId);
+  return typeof sentAt === "number" && now - sentAt <= NEW_CALL_ALERT_CACHE_TTL_MS;
+}
+
+function rememberNewCallAlert(callId: string) {
+  recentNewCallAlertIds.set(callId, Date.now());
+}
+
 function mapStatusFromAnalysis(
   analysis: any
 ): "pendiente" | "en_espera_aceptacion" | "asignada" {
@@ -1832,7 +1851,11 @@ if (!recordingUrl && retellCallDetails) {
         analysis: analysis as any,
       });
 
-      if (!existingCall) {
+      const alertAlreadySent =
+        typeof (existingCall as any)?.newCallAlertSentAt === "number" ||
+        hasRecentNewCallAlert(callId);
+
+      if (!alertAlreadySent) {
         try {
           await sendNewCallAlertEmail({
             to: "247tusabogadossocial@gmail.com",
@@ -1846,6 +1869,19 @@ if (!recordingUrl && retellCallDetails) {
               undefined,
             receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
           });
+          rememberNewCallAlert(callId);
+
+          try {
+            await storage.updateCallLogByRetellCallId(callId, {
+              newCallAlertSentAt: Date.now(),
+            } as any);
+          } catch (markErr: any) {
+            console.warn(
+              `[RETELL] could not persist new call alert flag for callId=${callId}: ${
+                markErr?.message ?? "unknown"
+              }`
+            );
+          }
         } catch (alertErr: any) {
           console.error(
             `[RETELL] new call email alert failed for callId=${callId}: ${
