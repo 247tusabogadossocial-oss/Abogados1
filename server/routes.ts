@@ -278,6 +278,45 @@ async function ensureLeadLinkedToCall(input: {
   return created.id;
 }
 
+async function persistInboundPlaceholderAndLead(input: {
+  fromNumber: string;
+  toNumber?: string;
+  sourceEvent?: string;
+  createdAt?: number;
+}) {
+  const placeholder = await storage.upsertInboundPlaceholder({
+    fromNumber: input.fromNumber,
+    toNumber: input.toNumber || undefined,
+    sourceEvent: input.sourceEvent,
+    createdAt: input.createdAt ?? Date.now(),
+  });
+
+  const placeholderRetellCallId = safeString((placeholder as any)?.retellCallId).trim();
+  const placeholderLeadId = Number((placeholder as any)?.leadId ?? 0);
+  const linkedLeadId = await ensureLeadLinkedToCall({
+    retellCallId: placeholderRetellCallId,
+    existingLeadId: placeholderLeadId,
+    phoneNumber: input.fromNumber,
+    status: "pendiente",
+  });
+
+  if (
+    placeholderRetellCallId &&
+    Number.isFinite(linkedLeadId) &&
+    linkedLeadId! > 0 &&
+    (!Number.isFinite(placeholderLeadId) || placeholderLeadId <= 0)
+  ) {
+    await storage.updateCallLogByRetellCallId(placeholderRetellCallId, {
+      leadId: linkedLeadId,
+    } as any);
+  }
+
+  return {
+    placeholder,
+    linkedLeadId: Number.isFinite(linkedLeadId) ? linkedLeadId : undefined,
+  };
+}
+
 type EmailDecision = "accept" | "reject";
 
 function getEmailDecisionSecret(): string {
@@ -1700,20 +1739,39 @@ ${JSON.stringify(callsData, null, 2)}
           },
         };
 
+        let persistedInbound:
+          | {
+              placeholder: any;
+              linkedLeadId?: number;
+            }
+          | undefined;
+
+        if (fromNumber) {
+          persistedInbound = await persistInboundPlaceholderAndLead({
+            fromNumber,
+            toNumber: toNumber || undefined,
+            sourceEvent: event,
+            createdAt: Date.now(),
+          });
+        }
+
         res.json(inboundResponse);
 
-        // Retell expects the inbound webhook to return quickly so the phone call can proceed.
-        // Persist CRM state asynchronously after acknowledging the webhook.
+        // Email alert is non-critical; keep it async so the phone call is not blocked by SMTP.
         void (async () => {
           if (!fromNumber) return;
 
           try {
-            const placeholder = await storage.upsertInboundPlaceholder({
-              fromNumber,
-              toNumber: toNumber || undefined,
-              sourceEvent: event,
-              createdAt: Date.now(),
-            });
+            const placeholder =
+              persistedInbound?.placeholder ??
+              (
+                await persistInboundPlaceholderAndLead({
+                  fromNumber,
+                  toNumber: toNumber || undefined,
+                  sourceEvent: event,
+                  createdAt: Date.now(),
+                })
+              ).placeholder;
 
             const inboundAlertSent =
               typeof (placeholder as any)?.newCallAlertSentAt === "number" ||
@@ -1741,36 +1799,6 @@ ${JSON.stringify(callsData, null, 2)}
                   }`
                 );
               }
-            }
-
-            try {
-              const placeholderRetellCallId = safeString(
-                (placeholder as any)?.retellCallId
-              ).trim();
-              const placeholderLeadId = Number((placeholder as any)?.leadId ?? 0);
-              const linkedLeadId = await ensureLeadLinkedToCall({
-                retellCallId: placeholderRetellCallId,
-                existingLeadId: placeholderLeadId,
-                phoneNumber: fromNumber,
-                status: "pendiente",
-              });
-
-              if (
-                placeholderRetellCallId &&
-                Number.isFinite(linkedLeadId) &&
-                linkedLeadId! > 0 &&
-                (!Number.isFinite(placeholderLeadId) || placeholderLeadId <= 0)
-              ) {
-                await storage.updateCallLogByRetellCallId(placeholderRetellCallId, {
-                  leadId: linkedLeadId,
-                } as any);
-              }
-            } catch (leadErr: any) {
-              console.error(
-                `[RETELL] inbound placeholder lead link failed from=${fromNumber}: ${
-                  leadErr?.message ?? "unknown"
-                }`
-              );
             }
           } catch (inboundErr: any) {
             console.error(
