@@ -145,10 +145,6 @@ function isFinalEvent(e: string) {
   );
 }
 
-function isStartedEvent(e: string) {
-  return e === "call_started" || e === "call.started";
-}
-
 function mapStatusFromAnalysis(
   analysis: any
 ): "pendiente" | "en_espera_aceptacion" | "asignada" {
@@ -1604,49 +1600,6 @@ ${JSON.stringify(callsData, null, 2)}
 
       if (!callId) return res.json({ success: true });
 
-      const phoneNumber =
-        pickFirstString(
-          call.from_number,
-          call.fromNumber,
-          payload.from_number,
-          payload.fromNumber
-        ) ?? "";
-      const direction =
-        pickFirstString(call.direction, payload.direction) ?? undefined;
-      let existingCall = await storage.getCallLogByRetellCallId(callId);
-
-      if (isStartedEvent(event) && !existingCall) {
-        try {
-          existingCall = await storage.updateCallLogByRetellCallId(callId, {
-            retellCallId: callId,
-            status: "pendiente",
-            phoneNumber: phoneNumber || undefined,
-            direction,
-          });
-        } catch (callLogErr: any) {
-          console.error(
-            `[RETELL] failed to seed call log for started event callId=${callId}: ${
-              callLogErr?.message ?? "unknown"
-            }`
-          );
-        }
-
-        try {
-          await sendNewCallAlertEmail({
-            to: "247tusabogadossocial@gmail.com",
-            retellCallId: callId,
-            phoneNumber,
-            receivedAt: Date.now(),
-          });
-        } catch (alertErr: any) {
-          console.error(
-            `[RETELL] new call email alert failed for started event callId=${callId}: ${
-              alertErr?.message ?? "unknown"
-            }`
-          );
-        }
-      }
-
       const analysisFromWebhook =
         call.call_analysis || payload.call_analysis || {};
       const transcriptFromWebhook =
@@ -1721,6 +1674,7 @@ if (!recordingUrl && retellCallDetails) {
       if (!looksProcessable) {
         return res.json({ success: true });
       }
+      const existingCall = await storage.getCallLogByRetellCallId(callId);
       const cad = analysis.custom_analysis_data || {};
       const postData = analysis.post_call_data || {};
       const leadName = safeString(cad.name, "").trim();
@@ -1837,16 +1791,26 @@ if (!recordingUrl && retellCallDetails) {
         ? existingStatus
         : "pendiente";
 
-      const enrichedPhoneNumber =
-        pickFirstString(phoneNumber, (existingCall as any)?.phoneNumber) ?? "";
-      const enrichedDirection =
-        pickFirstString(direction, (existingCall as any)?.direction) ?? undefined;
+      const phoneNumber =
+        pickFirstString(
+          call.from_number,
+          call.fromNumber,
+          payload.from_number,
+          payload.fromNumber,
+          (existingCall as any)?.phoneNumber
+        ) ?? "";
+      const direction =
+        pickFirstString(
+          call.direction,
+          payload.direction,
+          (existingCall as any)?.direction
+        ) ?? undefined;
 
       const updatedCall = await storage.updateCallLogByRetellCallId(callId, {
         retellCallId: callId,
         status: webhookStatus,
-        phoneNumber: enrichedPhoneNumber || undefined,
-        direction: enrichedDirection,
+        phoneNumber: phoneNumber || undefined,
+        direction,
         duration: durationSec,
         recordingUrl:
           recordingUrl ??
@@ -1870,13 +1834,13 @@ if (!recordingUrl && retellCallDetails) {
 
       if (!existingCall) {
         try {
-            await sendNewCallAlertEmail({
-              to: "247tusabogadossocial@gmail.com",
-              retellCallId: callId,
-              phoneNumber: enrichedPhoneNumber,
-              caseType,
-              location,
-              summary:
+          await sendNewCallAlertEmail({
+            to: "247tusabogadossocial@gmail.com",
+            retellCallId: callId,
+            phoneNumber,
+            caseType,
+            location,
+            summary:
               safeString(analysis?.call_summary) ||
               safeString(analysis?.post_call_analysis?.call_summary) ||
               undefined,
