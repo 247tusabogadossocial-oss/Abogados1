@@ -1649,11 +1649,14 @@ ${JSON.stringify(callsData, null, 2)}
 
   const handleRetellWebhook = async (req: any, res: any) => {
     const payload = req.body || {};
-    const event = normalizeEvent(payload.event || payload.type);
+    const payloadData = payload.data || {};
+    const event = normalizeEvent(
+      payload.event || payload.type || payloadData.event || payloadData.type
+    );
 
     try {
       if (isInboundEvent(event)) {
-        const inbound = payload.call_inbound || payload.data?.call_inbound || payload.data || {};
+        const inbound = payload.call_inbound || payloadData.call_inbound || payloadData || {};
         const fromNumber =
           pickFirstString(
             inbound.from_number,
@@ -1762,29 +1765,46 @@ ${JSON.stringify(callsData, null, 2)}
         });
       }
 
-      const call = payload.call || {};
+      const call = payload.call || payloadData.call || {};
       const callId = pickFirstString(
         call.call_id,
         call.callId,
         call.id,
+        payloadData.call_id,
+        payloadData.callId,
+        payloadData.id,
+        payloadData.call?.call_id,
+        payloadData.call?.callId,
+        payloadData.call?.id,
         payload.call_id,
         payload.callId,
         payload.id,
-        payload?.data?.call_id,
-        payload?.data?.callId,
-        payload?.data?.id
+        payloadData?.call?.call_id,
+        payloadData?.call?.callId,
+        payloadData?.call?.id
       );
 
       console.log(
         `[RETELL] webhook path=${req.path} event=${event || "unknown"} callId=${callId || "none"}`
       );
 
-      if (!callId) return res.json({ success: true });
+      if (!callId) {
+        console.warn(
+          `[RETELL] webhook ignored because callId is missing. event=${event || "unknown"} keys=${Object.keys(
+            payload || {}
+          ).join(",")}`
+        );
+        return res.json({ success: true });
+      }
 
       const fromNumber =
         pickFirstString(
           call.from_number,
           call.fromNumber,
+          payloadData.from_number,
+          payloadData.fromNumber,
+          payloadData.call?.from_number,
+          payloadData.call?.fromNumber,
           payload.from_number,
           payload.fromNumber
         ) ?? "";
@@ -1792,11 +1812,20 @@ ${JSON.stringify(callsData, null, 2)}
         pickFirstString(
           call.to_number,
           call.toNumber,
+          payloadData.to_number,
+          payloadData.toNumber,
+          payloadData.call?.to_number,
+          payloadData.call?.toNumber,
           payload.to_number,
           payload.toNumber
         ) ?? "";
       const direction = normalizeDirection(
-        pickFirstString(call.direction, payload.direction)
+        pickFirstString(
+          call.direction,
+          payloadData.direction,
+          payloadData.call?.direction,
+          payload.direction
+        )
       );
 
       if (fromNumber && direction === "inbound") {
@@ -1818,9 +1847,15 @@ ${JSON.stringify(callsData, null, 2)}
       }
 
       const analysisFromWebhook =
-        call.call_analysis || payload.call_analysis || {};
+        call.call_analysis ||
+        payload.call_analysis ||
+        payloadData.call_analysis ||
+        payloadData.call?.call_analysis ||
+        {};
       const transcriptFromWebhook =
         safeString(call.transcript) ||
+        safeString(payloadData.transcript) ||
+        safeString(payloadData.call?.transcript) ||
         safeString(payload.transcript) ||
         safeString(analysisFromWebhook?.transcript) ||
         "";
@@ -1858,7 +1893,11 @@ ${JSON.stringify(callsData, null, 2)}
         "";
 
       const durationMs =
-        call.duration_ms ?? payload.duration_ms ?? 0;
+        call.duration_ms ??
+        payloadData.duration_ms ??
+        payloadData.call?.duration_ms ??
+        payload.duration_ms ??
+        0;
 
       const durationSec =
         typeof durationMs === "number"
@@ -1901,6 +1940,35 @@ if (!recordingUrl && retellCallDetails) {
         !!recordingUrl ||
         transcript.trim().length > 0 ||
         Object.keys(analysis || {}).length > 0;
+      const fallbackLeadName =
+        safeString((existingCall as any)?.leadName).trim() ||
+        buildFallbackLeadName(fromNumber);
+      const fallbackCaseType =
+        safeString((existingCall as any)?.caseType).trim() || "General";
+      const fallbackUrgency =
+        safeString((existingCall as any)?.urgency).trim() || "Medium";
+      const normalizedPhoneNumber =
+        pickFirstString(fromNumber, (existingCall as any)?.phoneNumber) ?? "";
+
+      const ensuredLeadId = await ensureLeadLinkedToCall({
+        retellCallId: callId,
+        existingLeadId: Number((existingCall as any)?.leadId ?? 0),
+        phoneNumber: normalizedPhoneNumber,
+        name: fallbackLeadName,
+        caseType: fallbackCaseType,
+        urgency: fallbackUrgency,
+        transcript,
+        status: "pendiente",
+      });
+
+      if (Number.isFinite(ensuredLeadId) && ensuredLeadId! > 0) {
+        const currentLeadId = Number((existingCall as any)?.leadId ?? 0);
+        if (!Number.isFinite(currentLeadId) || currentLeadId <= 0) {
+          existingCall = await storage.updateCallLogByRetellCallId(callId, {
+            leadId: ensuredLeadId,
+          } as any);
+        }
+      }
 
       if (!looksProcessable) {
         return res.json({ success: true });
@@ -2025,11 +2093,7 @@ if (!recordingUrl && retellCallDetails) {
         ? existingStatus
         : "pendiente";
 
-      const phoneNumber =
-        pickFirstString(
-          fromNumber,
-          (existingCall as any)?.phoneNumber
-        ) ?? "";
+      const phoneNumber = normalizedPhoneNumber;
       const normalizedDirection =
         pickFirstString(
           direction,
@@ -2107,7 +2171,12 @@ if (!recordingUrl && retellCallDetails) {
       );
 
       let leadId =
-        Number((updatedCall as any)?.leadId ?? (existingCall as any)?.leadId ?? 0) || undefined;
+        Number(
+          (updatedCall as any)?.leadId ??
+            (existingCall as any)?.leadId ??
+            ensuredLeadId ??
+            0
+        ) || undefined;
       let existing =
         Number.isFinite(leadId) && leadId! > 0
           ? await storage.getLead(leadId!)
