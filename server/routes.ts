@@ -1667,6 +1667,23 @@ ${JSON.stringify(callsData, null, 2)}
           ? Math.round(durationMs / 1000)
           : 0;
 
+      let existingCall = await storage.getCallLogByRetellCallId(callId);
+      if (!existingCall) {
+        existingCall = await storage.updateCallLogByRetellCallId(callId, {
+          retellCallId: callId,
+          status: "pendiente",
+          phoneNumber:
+            pickFirstString(
+              call.from_number,
+              call.fromNumber,
+              payload.from_number,
+              payload.fromNumber
+            ) ?? undefined,
+          direction: pickFirstString(call.direction, payload.direction) ?? undefined,
+          duration: durationSec || undefined,
+        } as any);
+      }
+
       let recordingUrl = extractRecordingUrl(
   payload,
   call,
@@ -1693,7 +1710,6 @@ if (!recordingUrl && retellCallDetails) {
       if (!looksProcessable) {
         return res.json({ success: true });
       }
-      const existingCall = await storage.getCallLogByRetellCallId(callId);
       const cad = analysis.custom_analysis_data || {};
       const postData = analysis.post_call_data || {};
       const leadName = safeString(cad.name, "").trim();
