@@ -24,8 +24,11 @@ export interface CallLog {
   retellCallId: string;
   agentId?: string;
   phoneNumber?: string;
+  toNumber?: string;
   status?: string;
   direction?: string;
+  sourceEvent?: string;
+  isPlaceholder?: boolean;
   duration?: number;
   recordingUrl?: string;
   summary?: string;

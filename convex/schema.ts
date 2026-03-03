@@ -115,9 +115,12 @@ export default defineSchema({
 
     agentId: v.optional(v.string()),
     phoneNumber: v.optional(v.string()),
+    toNumber: v.optional(v.string()),
 
     status: v.string(),
     direction: v.optional(v.string()),
+    sourceEvent: v.optional(v.string()),
+    isPlaceholder: v.optional(v.boolean()),
     duration: v.optional(v.number()),
     recordingUrl: v.optional(v.string()),
 

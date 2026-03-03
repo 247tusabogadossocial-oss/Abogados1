@@ -51,6 +51,19 @@ export interface IStorage {
   getCallLogByRetellCallId(retellCallId: string): Promise<CallLog | undefined>;
   updateCallLogByRetellCallId(retellCallId: string, updates: Partial<InsertCallLog>): Promise<CallLog>;
   markNewCallAlertSent(retellCallId: string, sentAt?: number): Promise<boolean>;
+  upsertInboundPlaceholder(input: {
+    fromNumber: string;
+    toNumber?: string;
+    sourceEvent?: string;
+    createdAt?: number;
+  }): Promise<CallLog>;
+  claimInboundPlaceholder(input: {
+    retellCallId: string;
+    fromNumber: string;
+    toNumber?: string;
+    sourceEvent?: string;
+    claimedAt?: number;
+  }): Promise<CallLog | undefined>;
 
   // Attorneys
   getAttorneys(filters?: { q?: string; city?: string; state?: string; specialty?: string }): Promise<Attorney[]>;
@@ -216,8 +229,11 @@ export class ConvexStorage implements IStorage {
         leadId: (log as any).leadId ?? undefined,
         agentId: (log as any).agentId ?? undefined,
         phoneNumber: (log as any).phoneNumber ?? undefined,
+        toNumber: (log as any).toNumber ?? undefined,
         status: (log as any).status ?? undefined,
         direction: (log as any).direction ?? undefined,
+        sourceEvent: (log as any).sourceEvent ?? undefined,
+        isPlaceholder: (log as any).isPlaceholder ?? undefined,
         duration: (log as any).duration ?? undefined,
         recordingUrl: (log as any).recordingUrl ?? undefined,
         summary: (log as any).summary ?? undefined,
@@ -268,6 +284,30 @@ export class ConvexStorage implements IStorage {
       retellCallId,
       sentAt,
     });
+  }
+
+  async upsertInboundPlaceholder(input: {
+    fromNumber: string;
+    toNumber?: string;
+    sourceEvent?: string;
+    createdAt?: number;
+  }): Promise<CallLog> {
+    const { client, api } = convexClient();
+    const row: any = await client.mutation(api.callLogs.upsertInboundPlaceholder, input);
+    return { ...row, createdAt: row.createdAt ? new Date(row.createdAt) : null } as any;
+  }
+
+  async claimInboundPlaceholder(input: {
+    retellCallId: string;
+    fromNumber: string;
+    toNumber?: string;
+    sourceEvent?: string;
+    claimedAt?: number;
+  }): Promise<CallLog | undefined> {
+    const { client, api } = convexClient();
+    const row: any = await client.mutation(api.callLogs.claimInboundPlaceholder, input);
+    if (!row) return undefined;
+    return { ...row, createdAt: row.createdAt ? new Date(row.createdAt) : null } as any;
   }
 
   // -------------------------

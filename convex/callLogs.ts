@@ -11,6 +11,33 @@ async function findCallLogByRetellCallId(ctx: any, retellCallId: string) {
   return matches.sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
 }
 
+async function findRecentInboundPlaceholder(
+  ctx: any,
+  input: {
+    fromNumber: string;
+    toNumber?: string;
+    now?: number;
+    windowMs: number;
+  }
+) {
+  const now = input.now ?? Date.now();
+  const fromNumber = String(input.fromNumber ?? "").trim();
+  const toNumber = String(input.toNumber ?? "").trim();
+  if (!fromNumber) return null;
+
+  const rows = await ctx.db.query("callLogs").collect();
+  const matches = rows.filter((row: any) => {
+    if (row?.isPlaceholder !== true) return false;
+    if (String(row?.direction ?? "").trim().toLowerCase() !== "inbound") return false;
+    if (String(row?.phoneNumber ?? "").trim() !== fromNumber) return false;
+    if (toNumber && String(row?.toNumber ?? "").trim() !== toNumber) return false;
+    return now - Number(row?.createdAt ?? 0) <= input.windowMs;
+  });
+
+  if (!matches.length) return null;
+  return matches.sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+}
+
 async function findLeadByNumericId(ctx: any, id: number) {
   const matches = await ctx.db
     .query("leads")
@@ -191,6 +218,78 @@ export const markNewCallAlertSent = mutation({
     });
 
     return true;
+  },
+});
+
+export const upsertInboundPlaceholder = mutation({
+  args: {
+    fromNumber: v.string(),
+    toNumber: v.optional(v.string()),
+    sourceEvent: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const now = args.createdAt ?? Date.now();
+    const fromNumber = String(args.fromNumber ?? "").trim();
+    const toNumber = String(args.toNumber ?? "").trim();
+    if (!fromNumber) {
+      throw new Error("fromNumber es obligatorio");
+    }
+
+    const existing = await findRecentInboundPlaceholder(ctx, {
+      fromNumber,
+      toNumber,
+      now,
+      windowMs: 1000 * 60 * 3,
+    });
+    if (existing) return existing;
+
+    const newId = await nextId(ctx, "callLogs");
+    const docId = await ctx.db.insert("callLogs", {
+      id: newId,
+      retellCallId: `inbound:${fromNumber}:${toNumber || "unknown"}:${now}`,
+      phoneNumber: fromNumber,
+      ...(toNumber ? { toNumber } : {}),
+      status: "pendiente",
+      direction: "inbound",
+      isPlaceholder: true,
+      sourceEvent: args.sourceEvent ?? "call_inbound",
+      createdAt: now,
+      extraFields: [],
+    });
+
+    return await ctx.db.get(docId);
+  },
+});
+
+export const claimInboundPlaceholder = mutation({
+  args: {
+    retellCallId: v.string(),
+    fromNumber: v.string(),
+    toNumber: v.optional(v.string()),
+    sourceEvent: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const alreadyExists = await findCallLogByRetellCallId(ctx, args.retellCallId);
+    if (alreadyExists) return alreadyExists;
+
+    const placeholder = await findRecentInboundPlaceholder(ctx, {
+      fromNumber: args.fromNumber,
+      toNumber: args.toNumber,
+      now: args.claimedAt ?? Date.now(),
+      windowMs: 1000 * 60 * 60 * 6,
+    });
+    if (!placeholder) return null;
+
+    await ctx.db.patch(placeholder._id, {
+      retellCallId: args.retellCallId,
+      isPlaceholder: false,
+      ...(args.toNumber ? { toNumber: args.toNumber } : {}),
+      ...(args.sourceEvent ? { sourceEvent: args.sourceEvent } : {}),
+    });
+
+    return await ctx.db.get(placeholder._id);
   },
 });
 

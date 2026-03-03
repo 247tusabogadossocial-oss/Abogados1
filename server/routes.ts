@@ -145,6 +145,15 @@ function isFinalEvent(e: string) {
   );
 }
 
+function isInboundEvent(e: string) {
+  return e === "call_inbound" || e === "call.inbound";
+}
+
+function normalizeDirection(value: any): string | undefined {
+  const direction = String(value ?? "").trim().toLowerCase();
+  return direction || undefined;
+}
+
 const recentNewCallAlertIds = new Map<string, number>();
 const NEW_CALL_ALERT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 
@@ -1600,6 +1609,86 @@ ${JSON.stringify(callsData, null, 2)}
     const event = normalizeEvent(payload.event || payload.type);
 
     try {
+      if (isInboundEvent(event)) {
+        const inbound = payload.call_inbound || payload.data?.call_inbound || payload.data || {};
+        const fromNumber =
+          pickFirstString(
+            inbound.from_number,
+            inbound.fromNumber,
+            payload.from_number,
+            payload.fromNumber
+          ) ?? "";
+        const toNumber =
+          pickFirstString(
+            inbound.to_number,
+            inbound.toNumber,
+            payload.to_number,
+            payload.toNumber
+          ) ?? "";
+
+        if (fromNumber) {
+          const placeholder = await storage.upsertInboundPlaceholder({
+            fromNumber,
+            toNumber: toNumber || undefined,
+            sourceEvent: event,
+            createdAt: Date.now(),
+          });
+
+          const inboundAlertSent =
+            typeof (placeholder as any)?.newCallAlertSentAt === "number" ||
+            hasRecentNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
+
+          if (!inboundAlertSent) {
+            try {
+              await sendNewCallAlertEmail({
+                to: "247tusabogadossocial@gmail.com",
+                retellCallId: String((placeholder as any)?.retellCallId ?? ""),
+                phoneNumber: fromNumber,
+                receivedAt: (placeholder as any)?.createdAt ?? Date.now(),
+              });
+              rememberNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
+              await storage.updateCallLogByRetellCallId(String((placeholder as any)?.retellCallId ?? ""), {
+                newCallAlertSentAt: Date.now(),
+              } as any);
+            } catch (alertErr: any) {
+              console.error(
+                `[RETELL] inbound new call email alert failed from=${fromNumber}: ${
+                  alertErr?.message ?? "unknown"
+                }`
+              );
+            }
+          }
+        }
+
+        const overrideAgentId = pickFirstString(
+          inbound.override_agent_id,
+          inbound.overrideAgentId,
+          inbound.agent_id,
+          inbound.agentId,
+          payload.override_agent_id,
+          payload.overrideAgentId,
+          payload.agent_id,
+          payload.agentId
+        );
+        const overrideAgentVersion = pickFirstString(
+          inbound.override_agent_version,
+          inbound.overrideAgentVersion,
+          inbound.agent_version,
+          inbound.agentVersion,
+          payload.override_agent_version,
+          payload.overrideAgentVersion,
+          payload.agent_version,
+          payload.agentVersion
+        );
+
+        return res.json({
+          call_inbound: {
+            ...(overrideAgentId ? { override_agent_id: overrideAgentId } : {}),
+            ...(overrideAgentVersion ? { override_agent_version: overrideAgentVersion } : {}),
+          },
+        });
+      }
+
       const call = payload.call || {};
       const callId = pickFirstString(
         call.call_id,
@@ -1618,6 +1707,42 @@ ${JSON.stringify(callsData, null, 2)}
       );
 
       if (!callId) return res.json({ success: true });
+
+      const fromNumber =
+        pickFirstString(
+          call.from_number,
+          call.fromNumber,
+          payload.from_number,
+          payload.fromNumber
+        ) ?? "";
+      const toNumber =
+        pickFirstString(
+          call.to_number,
+          call.toNumber,
+          payload.to_number,
+          payload.toNumber
+        ) ?? "";
+      const direction = normalizeDirection(
+        pickFirstString(call.direction, payload.direction)
+      );
+
+      if (fromNumber && direction === "inbound") {
+        try {
+          await storage.claimInboundPlaceholder({
+            retellCallId: callId,
+            fromNumber,
+            toNumber: toNumber || undefined,
+            sourceEvent: event,
+            claimedAt: Date.now(),
+          });
+        } catch (claimErr: any) {
+          console.error(
+            `[RETELL] could not claim inbound placeholder for callId=${callId}: ${
+              claimErr?.message ?? "unknown"
+            }`
+          );
+        }
+      }
 
       const analysisFromWebhook =
         call.call_analysis || payload.call_analysis || {};
@@ -1672,14 +1797,11 @@ ${JSON.stringify(callsData, null, 2)}
         existingCall = await storage.updateCallLogByRetellCallId(callId, {
           retellCallId: callId,
           status: "pendiente",
-          phoneNumber:
-            pickFirstString(
-              call.from_number,
-              call.fromNumber,
-              payload.from_number,
-              payload.fromNumber
-            ) ?? undefined,
-          direction: pickFirstString(call.direction, payload.direction) ?? undefined,
+          phoneNumber: fromNumber || undefined,
+          toNumber: toNumber || undefined,
+          direction,
+          sourceEvent: event || undefined,
+          isPlaceholder: false,
           duration: durationSec || undefined,
         } as any);
       }
@@ -1828,16 +1950,12 @@ if (!recordingUrl && retellCallDetails) {
 
       const phoneNumber =
         pickFirstString(
-          call.from_number,
-          call.fromNumber,
-          payload.from_number,
-          payload.fromNumber,
+          fromNumber,
           (existingCall as any)?.phoneNumber
         ) ?? "";
-      const direction =
+      const normalizedDirection =
         pickFirstString(
-          call.direction,
-          payload.direction,
+          direction,
           (existingCall as any)?.direction
         ) ?? undefined;
 
@@ -1845,7 +1963,10 @@ if (!recordingUrl && retellCallDetails) {
         retellCallId: callId,
         status: webhookStatus,
         phoneNumber: phoneNumber || undefined,
-        direction,
+        toNumber: toNumber || (existingCall as any)?.toNumber || undefined,
+        direction: normalizedDirection,
+        sourceEvent: event || (existingCall as any)?.sourceEvent || undefined,
+        isPlaceholder: false,
         duration: durationSec,
         recordingUrl:
           recordingUrl ??
