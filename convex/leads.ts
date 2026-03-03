@@ -81,8 +81,8 @@ export const list = query({
       ...l,
       status: normalizeLeadStatus(l.status),
       retellCallId:
-        String((l as any)?.retellCallId ?? "").trim() ||
         latestRetellByLeadId.get(Number((l as any)?.id ?? 0))?.retellCallId ||
+        String((l as any)?.retellCallId ?? "").trim() ||
         undefined,
     }));
 

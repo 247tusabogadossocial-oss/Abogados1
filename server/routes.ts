@@ -235,6 +235,49 @@ function normalizeEmail(v: any): string {
   return safeString(v).toLowerCase().trim();
 }
 
+function buildFallbackLeadName(phoneNumber?: string): string {
+  const digits = safeString(phoneNumber).replace(/\D+/g, "");
+  if (!digits) return "Cliente sin identificar";
+  return `Cliente ${digits.slice(-4)}`;
+}
+
+async function ensureLeadLinkedToCall(input: {
+  retellCallId: string;
+  existingLeadId?: number | null;
+  phoneNumber?: string;
+  name?: string;
+  caseType?: string;
+  urgency?: string;
+  transcript?: string;
+  summary?: string;
+  status?: string;
+}): Promise<number | undefined> {
+  const retellCallId = safeString(input.retellCallId).trim();
+  if (!retellCallId) return undefined;
+
+  const existingLeadId = Number(input.existingLeadId ?? 0);
+  if (Number.isFinite(existingLeadId) && existingLeadId > 0) {
+    return existingLeadId;
+  }
+
+  const existingLead = await storage.getLeadByRetellCallId(retellCallId);
+  if (existingLead) return existingLead.id;
+
+  const phoneNumber = safeString(input.phoneNumber).trim();
+  const created = await storage.createLead({
+    retellCallId,
+    name: safeString(input.name).trim() || buildFallbackLeadName(phoneNumber),
+    phone: phoneNumber || "Sin numero",
+    caseType: safeString(input.caseType).trim() || "General",
+    urgency: safeString(input.urgency).trim() || "Medium",
+    transcript: safeString(input.transcript).trim() || undefined,
+    summary: safeString(input.summary).trim() || undefined,
+    status: normalizeCrmStatus(input.status ?? "pendiente"),
+  } as any);
+
+  return created.id;
+}
+
 type EmailDecision = "accept" | "reject";
 
 function getEmailDecisionSecret(): string {
@@ -1658,6 +1701,36 @@ ${JSON.stringify(callsData, null, 2)}
               );
             }
           }
+
+          try {
+            const placeholderRetellCallId = safeString(
+              (placeholder as any)?.retellCallId
+            ).trim();
+            const placeholderLeadId = Number((placeholder as any)?.leadId ?? 0);
+            const linkedLeadId = await ensureLeadLinkedToCall({
+              retellCallId: placeholderRetellCallId,
+              existingLeadId: placeholderLeadId,
+              phoneNumber: fromNumber,
+              status: "pendiente",
+            });
+
+            if (
+              placeholderRetellCallId &&
+              Number.isFinite(linkedLeadId) &&
+              linkedLeadId! > 0 &&
+              (!Number.isFinite(placeholderLeadId) || placeholderLeadId <= 0)
+            ) {
+              await storage.updateCallLogByRetellCallId(placeholderRetellCallId, {
+                leadId: linkedLeadId,
+              } as any);
+            }
+          } catch (leadErr: any) {
+            console.error(
+              `[RETELL] inbound placeholder lead link failed from=${fromNumber}: ${
+                leadErr?.message ?? "unknown"
+              }`
+            );
+          }
         }
 
         const overrideAgentId = pickFirstString(
@@ -1934,6 +2007,10 @@ if (!recordingUrl && retellCallDetails) {
 
       const isValidCall =
         !isFakeName && hasConversation && isSuccessful;
+      const summaryText =
+        safeString(analysis?.call_summary) ||
+        safeString(analysis?.post_call_analysis?.call_summary) ||
+        undefined;
 
       const existingStatus = String((existingCall as any)?.status ?? "").toLowerCase();
       const protectedStatuses = new Set([
@@ -1982,9 +2059,7 @@ if (!recordingUrl && retellCallDetails) {
         caseType,
         transcript,
         summary:
-          safeString(analysis?.call_summary) ||
-          safeString(analysis?.post_call_analysis?.call_summary) ||
-          undefined,
+          summaryText,
         analysis: analysis as any,
       });
 
@@ -2000,10 +2075,7 @@ if (!recordingUrl && retellCallDetails) {
             phoneNumber,
             caseType,
             location,
-            summary:
-              safeString(analysis?.call_summary) ||
-              safeString(analysis?.post_call_analysis?.call_summary) ||
-              undefined,
+            summary: summaryText,
             receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
           });
           rememberNewCallAlert(callId);
@@ -2034,26 +2106,55 @@ if (!recordingUrl && retellCallDetails) {
         )} transcriptLen=${transcript.length}`
       );
 
+      let leadId =
+        Number((updatedCall as any)?.leadId ?? (existingCall as any)?.leadId ?? 0) || undefined;
+      let existing =
+        Number.isFinite(leadId) && leadId! > 0
+          ? await storage.getLead(leadId!)
+          : await storage.getLeadByRetellCallId(callId);
+
+      if (!existing) {
+        const ensuredLeadId = await ensureLeadLinkedToCall({
+          retellCallId: callId,
+          existingLeadId: leadId,
+          phoneNumber,
+          name: leadName,
+          caseType,
+          urgency: safeString(cad.urgency, "Medium"),
+          transcript,
+          summary: summaryText,
+          status: webhookStatus,
+        });
+
+        if (Number.isFinite(ensuredLeadId) && ensuredLeadId! > 0) {
+          leadId = ensuredLeadId;
+          existing = await storage.getLead(ensuredLeadId!);
+          await storage.updateCallLogByRetellCallId(callId, {
+            leadId: ensuredLeadId,
+          } as any);
+        }
+      } else {
+        leadId = existing.id;
+        const updatedCallLeadId = Number((updatedCall as any)?.leadId ?? 0);
+        if (!Number.isFinite(updatedCallLeadId) || updatedCallLeadId <= 0) {
+          await storage.updateCallLogByRetellCallId(callId, {
+            leadId: existing.id,
+          } as any);
+        }
+      }
+
       if (!isValidCall) {
         return res.json({ success: true });
       }
 
-      let leadId: number | undefined = undefined;
-
-      const existing =
-        await storage.getLeadByRetellCallId(callId);
-
       const leadPayload = {
         retellCallId: callId,
         name: leadName,
-        phone: safeString(call.from_number, "Unknown"),
+        phone: phoneNumber || "Sin numero",
         caseType: caseType || "General",
         urgency: safeString(cad.urgency, "Medium"),
         transcript,
-        summary:
-          safeString(analysis?.call_summary) ||
-          safeString(analysis?.post_call_analysis?.call_summary) ||
-          undefined,
+        summary: summaryText,
         status: mapStatusFromAnalysis(analysis),
       };
 
