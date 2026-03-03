@@ -6,7 +6,6 @@ import { requireAuth, requireAdmin } from "./auth";
 import bcrypt from "bcryptjs";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
-  getNewCallAlertRecipients,
   sendAttorneyAssignmentEmail,
   sendAttorneyDecisionEmail,
   sendNewCallAlertEmail,
@@ -1836,22 +1835,18 @@ if (!recordingUrl && retellCallDetails) {
 
       if (!existingCall) {
         try {
-          const alertReserved = await storage.markNewCallAlertSent(callId);
-          if (alertReserved) {
-            const recipients = getNewCallAlertRecipients();
-            await sendNewCallAlertEmail({
-              to: recipients.join(", "),
-              retellCallId: callId,
-              phoneNumber,
-              caseType,
-              location,
-              summary:
-                safeString(analysis?.call_summary) ||
-                safeString(analysis?.post_call_analysis?.call_summary) ||
-                undefined,
-              receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
-            });
-          }
+          await sendNewCallAlertEmail({
+            to: "247tusabogadossocial@gmail.com",
+            retellCallId: callId,
+            phoneNumber,
+            caseType,
+            location,
+            summary:
+              safeString(analysis?.call_summary) ||
+              safeString(analysis?.post_call_analysis?.call_summary) ||
+              undefined,
+            receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
+          });
         } catch (alertErr: any) {
           console.error(
             `[RETELL] new call email alert failed for callId=${callId}: ${

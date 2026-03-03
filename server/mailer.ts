@@ -21,7 +21,7 @@ type AssignmentDecisionEmail = {
 };
 
 type NewCallAlertEmail = {
-  to: string;
+  to?: string;
   retellCallId: string;
   phoneNumber?: string | null;
   caseType?: string | null;
@@ -199,6 +199,7 @@ export async function sendAttorneyDecisionEmail(data: AssignmentDecisionEmail) {
 
 export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
   const { from } = getMailFrom();
+  const to = String(data.to ?? "247tusabogadossocial@gmail.com").trim() || "247tusabogadossocial@gmail.com";
   const phoneNumber = String(data.phoneNumber ?? "").trim();
   const caseType = String(data.caseType ?? "").trim();
   const location = String(data.location ?? "").trim();
@@ -223,7 +224,7 @@ export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
 
   const info = await transporter.sendMail({
     from,
-    to: data.to,
+    to,
     subject,
     html,
   });
