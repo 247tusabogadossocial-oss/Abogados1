@@ -1672,70 +1672,6 @@ ${JSON.stringify(callsData, null, 2)}
             payload.toNumber
           ) ?? "";
 
-        if (fromNumber) {
-          const placeholder = await storage.upsertInboundPlaceholder({
-            fromNumber,
-            toNumber: toNumber || undefined,
-            sourceEvent: event,
-            createdAt: Date.now(),
-          });
-
-          const inboundAlertSent =
-            typeof (placeholder as any)?.newCallAlertSentAt === "number" ||
-            hasRecentNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
-
-          if (!inboundAlertSent) {
-            try {
-              await sendNewCallAlertEmail({
-                to: "247tusabogadossocial@gmail.com",
-                retellCallId: String((placeholder as any)?.retellCallId ?? ""),
-                phoneNumber: fromNumber,
-                receivedAt: (placeholder as any)?.createdAt ?? Date.now(),
-              });
-              rememberNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
-              await storage.updateCallLogByRetellCallId(String((placeholder as any)?.retellCallId ?? ""), {
-                newCallAlertSentAt: Date.now(),
-              } as any);
-            } catch (alertErr: any) {
-              console.error(
-                `[RETELL] inbound new call email alert failed from=${fromNumber}: ${
-                  alertErr?.message ?? "unknown"
-                }`
-              );
-            }
-          }
-
-          try {
-            const placeholderRetellCallId = safeString(
-              (placeholder as any)?.retellCallId
-            ).trim();
-            const placeholderLeadId = Number((placeholder as any)?.leadId ?? 0);
-            const linkedLeadId = await ensureLeadLinkedToCall({
-              retellCallId: placeholderRetellCallId,
-              existingLeadId: placeholderLeadId,
-              phoneNumber: fromNumber,
-              status: "pendiente",
-            });
-
-            if (
-              placeholderRetellCallId &&
-              Number.isFinite(linkedLeadId) &&
-              linkedLeadId! > 0 &&
-              (!Number.isFinite(placeholderLeadId) || placeholderLeadId <= 0)
-            ) {
-              await storage.updateCallLogByRetellCallId(placeholderRetellCallId, {
-                leadId: linkedLeadId,
-              } as any);
-            }
-          } catch (leadErr: any) {
-            console.error(
-              `[RETELL] inbound placeholder lead link failed from=${fromNumber}: ${
-                leadErr?.message ?? "unknown"
-              }`
-            );
-          }
-        }
-
         const overrideAgentId = pickFirstString(
           inbound.override_agent_id,
           inbound.overrideAgentId,
@@ -1757,12 +1693,95 @@ ${JSON.stringify(callsData, null, 2)}
           payload.agentVersion
         );
 
-        return res.json({
+        const inboundResponse = {
           call_inbound: {
             ...(overrideAgentId ? { override_agent_id: overrideAgentId } : {}),
             ...(overrideAgentVersion ? { override_agent_version: overrideAgentVersion } : {}),
           },
-        });
+        };
+
+        res.json(inboundResponse);
+
+        // Retell expects the inbound webhook to return quickly so the phone call can proceed.
+        // Persist CRM state asynchronously after acknowledging the webhook.
+        void (async () => {
+          if (!fromNumber) return;
+
+          try {
+            const placeholder = await storage.upsertInboundPlaceholder({
+              fromNumber,
+              toNumber: toNumber || undefined,
+              sourceEvent: event,
+              createdAt: Date.now(),
+            });
+
+            const inboundAlertSent =
+              typeof (placeholder as any)?.newCallAlertSentAt === "number" ||
+              hasRecentNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
+
+            if (!inboundAlertSent) {
+              try {
+                await sendNewCallAlertEmail({
+                  to: "247tusabogadossocial@gmail.com",
+                  retellCallId: String((placeholder as any)?.retellCallId ?? ""),
+                  phoneNumber: fromNumber,
+                  receivedAt: (placeholder as any)?.createdAt ?? Date.now(),
+                });
+                rememberNewCallAlert(String((placeholder as any)?.retellCallId ?? ""));
+                await storage.updateCallLogByRetellCallId(
+                  String((placeholder as any)?.retellCallId ?? ""),
+                  {
+                    newCallAlertSentAt: Date.now(),
+                  } as any
+                );
+              } catch (alertErr: any) {
+                console.error(
+                  `[RETELL] inbound new call email alert failed from=${fromNumber}: ${
+                    alertErr?.message ?? "unknown"
+                  }`
+                );
+              }
+            }
+
+            try {
+              const placeholderRetellCallId = safeString(
+                (placeholder as any)?.retellCallId
+              ).trim();
+              const placeholderLeadId = Number((placeholder as any)?.leadId ?? 0);
+              const linkedLeadId = await ensureLeadLinkedToCall({
+                retellCallId: placeholderRetellCallId,
+                existingLeadId: placeholderLeadId,
+                phoneNumber: fromNumber,
+                status: "pendiente",
+              });
+
+              if (
+                placeholderRetellCallId &&
+                Number.isFinite(linkedLeadId) &&
+                linkedLeadId! > 0 &&
+                (!Number.isFinite(placeholderLeadId) || placeholderLeadId <= 0)
+              ) {
+                await storage.updateCallLogByRetellCallId(placeholderRetellCallId, {
+                  leadId: linkedLeadId,
+                } as any);
+              }
+            } catch (leadErr: any) {
+              console.error(
+                `[RETELL] inbound placeholder lead link failed from=${fromNumber}: ${
+                  leadErr?.message ?? "unknown"
+                }`
+              );
+            }
+          } catch (inboundErr: any) {
+            console.error(
+              `[RETELL] inbound webhook background persistence failed from=${fromNumber}: ${
+                inboundErr?.message ?? "unknown"
+              }`
+            );
+          }
+        })();
+
+        return;
       }
 
       const call = payload.call || payloadData.call || {};
@@ -2256,6 +2275,7 @@ if (!recordingUrl && retellCallDetails) {
   app.post(api.webhooks.retell.path, handleRetellWebhook);
   app.post("/retell-webhook", handleRetellWebhook);
   app.post("/api/webhook", handleRetellWebhook);
+  app.post("/webhook", handleRetellWebhook);
 
   return httpServer;
 }
