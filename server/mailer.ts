@@ -38,19 +38,6 @@ function mustEnv(name: string) {
 
 const smtpTimeoutMs = Number(process.env.SMTP_TIMEOUT_MS ?? "8000");
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST ?? "smtp.gmail.com",
-  port: Number(process.env.SMTP_PORT ?? "587"),
-  secure: false,
-  connectionTimeout: smtpTimeoutMs,
-  greetingTimeout: smtpTimeoutMs,
-  socketTimeout: smtpTimeoutMs,
-  auth: {
-    user: mustEnv("SMTP_USER"),
-    pass: mustEnv("SMTP_PASS"),
-  },
-});
-
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -81,11 +68,70 @@ function stripLeadNameFromSummary(summary: string, leadName?: string | null): st
 
 function getMailFrom() {
   const fromName = process.env.SMTP_FROM_NAME ?? "Tus Abogados 24/7";
-  const fromEmail = mustEnv("SMTP_USER");
+  const fromEmail = String(process.env.MAIL_FROM_EMAIL ?? process.env.SMTP_USER ?? "").trim();
+  if (!fromEmail) throw new Error("MAIL_FROM_EMAIL/SMTP_USER no esta configurado");
   return {
     from: `${fromName} <${fromEmail}>`,
     fromEmail,
   };
+}
+
+function createSmtpTransporter() {
+  const smtpHost = String(process.env.SMTP_HOST ?? "smtp.gmail.com").trim();
+  const smtpHostIp = String(process.env.SMTP_HOST_IP ?? "").trim();
+  const smtpPort = Number(process.env.SMTP_PORT ?? "587");
+  const smtpSecure =
+    String(process.env.SMTP_SECURE ?? "").trim().toLowerCase() === "true" ||
+    smtpPort === 465;
+
+  return nodemailer.createTransport({
+    // If Render has trouble resolving/using IPv6 for Gmail, SMTP_HOST_IP can force IPv4.
+    host: smtpHostIp || smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    requireTLS: !smtpSecure,
+    connectionTimeout: smtpTimeoutMs,
+    greetingTimeout: smtpTimeoutMs,
+    socketTimeout: smtpTimeoutMs,
+    name: String(process.env.SMTP_CLIENT_NAME ?? "crm.tusabogados247.local").trim(),
+    auth: {
+      user: mustEnv("SMTP_USER"),
+      pass: mustEnv("SMTP_PASS"),
+    },
+    tls: {
+      servername: smtpHost,
+      minVersion: "TLSv1.2",
+      rejectUnauthorized: true,
+    },
+  });
+}
+
+async function deliverEmail(input: {
+  to: string | string[];
+  subject: string;
+  html: string;
+  text?: string;
+}) {
+  const { from } = getMailFrom();
+  const to = Array.isArray(input.to) ? input.to : [input.to];
+
+  console.log("[MAIL] sending SMTP...");
+  console.log("[MAIL] from:", from);
+  console.log("[MAIL] to:", to.join(", "));
+  if (process.env.SMTP_HOST_IP) {
+    console.log("[MAIL] using SMTP_HOST_IP override:", process.env.SMTP_HOST_IP);
+  }
+
+  const info = await createSmtpTransporter().sendMail({
+    from,
+    to,
+    subject: input.subject,
+    html: input.html,
+    ...(input.text ? { text: input.text } : {}),
+  });
+
+  console.log("[MAIL] smtp messageId:", info.messageId);
+  return { ok: true, messageId: info.messageId };
 }
 
 function formatAlertDate(value?: Date | number | string | null): string {
@@ -102,7 +148,7 @@ function formatAlertDate(value?: Date | number | string | null): string {
 
 export function getNewCallAlertRecipients(): string[] {
   const raw = String(process.env.NEW_CALL_ALERT_TO ?? "").trim();
-  const fallback = mustEnv("SMTP_USER");
+  const fallback = getMailFrom().fromEmail;
   const values = raw
     ? raw.split(",").map((value) => value.trim())
     : [fallback];
@@ -110,12 +156,6 @@ export function getNewCallAlertRecipients(): string[] {
 }
 
 export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
-  const { from } = getMailFrom();
-
-  console.log("[MAIL] sending SMTP...");
-  console.log("[MAIL] from:", from);
-  console.log("[MAIL] to:", data.to);
-
   const isValidationFlow = Boolean(data.acceptUrl || data.rejectUrl);
   const subject = isValidationFlow
     ? `Nuevo caso para validacion: ${data.caseType ?? "General"}`
@@ -156,20 +196,15 @@ export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
     </div>
   `;
 
-  const info = await transporter.sendMail({
-    from,
+  return await deliverEmail({
     to: data.to,
     subject,
     html,
   });
-
-  console.log("[MAIL] smtp messageId:", info.messageId);
-
-  return { ok: true, messageId: info.messageId };
 }
 
 export async function sendAttorneyDecisionEmail(data: AssignmentDecisionEmail) {
-  const { from, fromEmail } = getMailFrom();
+  const { fromEmail } = getMailFrom();
   const to = fromEmail;
 
   const decisionLabel = data.decision === "accept" ? "ACEPTADO" : "RECHAZADO";
@@ -190,20 +225,14 @@ export async function sendAttorneyDecisionEmail(data: AssignmentDecisionEmail) {
     </div>
   `;
 
-  const info = await transporter.sendMail({
-    from,
+  return await deliverEmail({
     to,
     subject,
     html,
   });
-
-  console.log("[MAIL] decision messageId:", info.messageId);
-
-  return { ok: true, messageId: info.messageId };
 }
 
 export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
-  const { from } = getMailFrom();
   const phoneNumber = String(data.phoneNumber ?? "").trim();
   const caseType = String(data.caseType ?? "").trim();
   const location = String(data.location ?? "").trim();
@@ -226,18 +255,9 @@ export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
     </div>
   `;
 
-  console.log("[MAIL] sending new call alert...");
-  console.log("[MAIL] from:", from);
-  console.log("[MAIL] to:", data.to);
-
-  const info = await transporter.sendMail({
-    from,
+  return await deliverEmail({
     to: data.to,
     subject,
     html,
   });
-
-  console.log("[MAIL] new-call-alert messageId:", info.messageId);
-
-  return { ok: true, messageId: info.messageId };
 }
