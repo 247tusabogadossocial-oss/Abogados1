@@ -8,6 +8,8 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   sendAttorneyAssignmentEmail,
   sendAttorneyDecisionEmail,
+  sendNewCallAlertEmail,
+  getNewCallAlertRecipients,
 } from "./mailer";
 import { openrouter } from "./services/ai";
 import { convexClient } from "./convexClient";
@@ -155,6 +157,26 @@ function isInboundEvent(e: string) {
 function normalizeDirection(value: any): string | undefined {
   const direction = String(value ?? "").trim().toLowerCase();
   return direction || undefined;
+}
+
+const recentNewCallAlertIds = new Map<string, number>();
+const inFlightNewCallAlertIds = new Set<string>();
+const NEW_CALL_ALERT_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+
+function hasRecentNewCallAlert(callId: string): boolean {
+  const now = Date.now();
+  recentNewCallAlertIds.forEach((ts, cachedCallId) => {
+    if (now - ts > NEW_CALL_ALERT_CACHE_TTL_MS) {
+      recentNewCallAlertIds.delete(cachedCallId);
+    }
+  });
+
+  const sentAt = recentNewCallAlertIds.get(callId);
+  return typeof sentAt === "number" && now - sentAt <= NEW_CALL_ALERT_CACHE_TTL_MS;
+}
+
+function rememberNewCallAlert(callId: string) {
+  recentNewCallAlertIds.set(callId, Date.now());
 }
 
 function mapStatusFromAnalysis(
@@ -2233,6 +2255,43 @@ ${JSON.stringify(callsData, null, 2)}
         await storage.updateCallLogByRetellCallId(callId, {
           leadId,
         });
+
+        const alertAlreadySent =
+          typeof (updatedCall as any)?.newCallAlertSentAt === "number" ||
+          hasRecentNewCallAlert(callId) ||
+          inFlightNewCallAlertIds.has(callId);
+
+        if (!alertAlreadySent) {
+          const recipients = getNewCallAlertRecipients();
+          if (recipients.length > 0) {
+            inFlightNewCallAlertIds.add(callId);
+            void (async () => {
+              try {
+                await sendNewCallAlertEmail({
+                  to: recipients.join(", "),
+                  retellCallId: callId,
+                  phoneNumber: resolvedPhone,
+                  caseType: resolvedCaseType,
+                  location,
+                  summary: summaryText,
+                  receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
+                });
+                rememberNewCallAlert(callId);
+                await storage.updateCallLogByRetellCallId(callId, {
+                  newCallAlertSentAt: Date.now(),
+                } as any);
+              } catch (alertErr: any) {
+                console.error(
+                  `[RETELL] new call email alert failed for callId=${callId}: ${
+                    alertErr?.message ?? "unknown"
+                  }`
+                );
+              } finally {
+                inFlightNewCallAlertIds.delete(callId);
+              }
+            })();
+          }
+        }
 
         if (!isValidCall) {
           console.log(
