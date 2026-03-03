@@ -6,6 +6,7 @@ import { rm, readFile } from "fs/promises";
 // which helps cold start times
 const allowlist = [
   "@google/generative-ai",
+  "@sendgrid/mail",
   "axios",
   "connect-pg-simple",
   "cors",
@@ -19,7 +20,6 @@ const allowlist = [
   "memorystore",
   "multer",
   "nanoid",
-  "nodemailer",
   "openai",
   "passport",
   "passport-local",

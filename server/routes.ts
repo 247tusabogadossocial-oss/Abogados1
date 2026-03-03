@@ -2268,7 +2268,7 @@ ${JSON.stringify(callsData, null, 2)}
             void (async () => {
               try {
                 await sendNewCallAlertEmail({
-                  to: recipients.join(", "),
+                  to: recipients,
                   retellCallId: callId,
                   phoneNumber: resolvedPhone,
                   caseType: resolvedCaseType,
