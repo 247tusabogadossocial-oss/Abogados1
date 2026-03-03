@@ -154,6 +154,7 @@ export default defineSchema({
     assignmentDecisionNotes: v.optional(v.string()),
     assignmentDeliveredAt: v.optional(v.number()),
     assignmentDeliveredByUserId: v.optional(v.string()),
+    newCallAlertSentAt: v.optional(v.number()),
 
     createdAt: v.number(),
   })

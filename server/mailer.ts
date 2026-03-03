@@ -20,6 +20,16 @@ type AssignmentDecisionEmail = {
   notes?: string | null;
 };
 
+type NewCallAlertEmail = {
+  to: string;
+  retellCallId: string;
+  phoneNumber?: string | null;
+  caseType?: string | null;
+  location?: string | null;
+  summary?: string | null;
+  receivedAt?: Date | number | string | null;
+};
+
 function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`${name} no esta configurado`);
@@ -64,10 +74,38 @@ function stripLeadNameFromSummary(summary: string, leadName?: string | null): st
     .trim();
 }
 
-export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
+function getMailFrom() {
   const fromName = process.env.SMTP_FROM_NAME ?? "Tus Abogados 24/7";
   const fromEmail = mustEnv("SMTP_USER");
-  const from = `${fromName} <${fromEmail}>`;
+  return {
+    from: `${fromName} <${fromEmail}>`,
+    fromEmail,
+  };
+}
+
+function formatAlertDate(value?: Date | number | string | null): string {
+  if (value == null) return new Date().toLocaleString("es-US");
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === "number"
+        ? new Date(value)
+        : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return new Date().toLocaleString("es-US");
+  return date.toLocaleString("es-US");
+}
+
+export function getNewCallAlertRecipients(): string[] {
+  const raw = String(process.env.NEW_CALL_ALERT_TO ?? "").trim();
+  const fallback = mustEnv("SMTP_USER");
+  const values = raw
+    ? raw.split(",").map((value) => value.trim())
+    : [fallback];
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
+  const { from } = getMailFrom();
 
   console.log("[MAIL] sending SMTP...");
   console.log("[MAIL] from:", from);
@@ -126,9 +164,7 @@ export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
 }
 
 export async function sendAttorneyDecisionEmail(data: AssignmentDecisionEmail) {
-  const fromName = process.env.SMTP_FROM_NAME ?? "Tus Abogados 24/7";
-  const fromEmail = mustEnv("SMTP_USER");
-  const from = `${fromName} <${fromEmail}>`;
+  const { from, fromEmail } = getMailFrom();
   const to = fromEmail;
 
   const decisionLabel = data.decision === "accept" ? "ACEPTADO" : "RECHAZADO";
@@ -157,6 +193,42 @@ export async function sendAttorneyDecisionEmail(data: AssignmentDecisionEmail) {
   });
 
   console.log("[MAIL] decision messageId:", info.messageId);
+
+  return { ok: true, messageId: info.messageId };
+}
+
+export async function sendNewCallAlertEmail(data: NewCallAlertEmail) {
+  const { from } = getMailFrom();
+  const phoneNumber = String(data.phoneNumber ?? "").trim();
+  const caseType = String(data.caseType ?? "").trim();
+  const location = String(data.location ?? "").trim();
+  const summary = String(data.summary ?? "").trim();
+  const receivedAt = formatAlertDate(data.receivedAt);
+  const subject = `Nueva llamada entrante${phoneNumber ? `: ${phoneNumber}` : ""}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.4">
+      <h2>Nueva llamada entrante</h2>
+      <p>Se registro una llamada nueva en el CRM.</p>
+      <ul>
+        <li><b>Telefono:</b> ${phoneNumber || "No disponible"}</li>
+        <li><b>Tipo de caso:</b> ${caseType || "General"}</li>
+        <li><b>Ubicacion:</b> ${location || "No disponible"}</li>
+        <li><b>Fecha:</b> ${receivedAt}</li>
+        <li><b>Retell Call ID:</b> ${data.retellCallId}</li>
+      </ul>
+      <p><b>Resumen:</b><br/>${summary || "Sin resumen disponible aun."}</p>
+    </div>
+  `;
+
+  const info = await transporter.sendMail({
+    from,
+    to: data.to,
+    subject,
+    html,
+  });
+
+  console.log("[MAIL] new-call-alert messageId:", info.messageId);
 
   return { ok: true, messageId: info.messageId };
 }

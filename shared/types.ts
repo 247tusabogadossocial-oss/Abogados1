@@ -48,6 +48,7 @@ export interface CallLog {
   assignmentDecisionNotes?: string;
   assignmentDeliveredAt?: number;
   assignmentDeliveredByUserId?: string;
+  newCallAlertSentAt?: number;
   createdAt: Date | null;
 }
 

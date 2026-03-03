@@ -50,6 +50,7 @@ export interface IStorage {
   createCallLog(log: InsertCallLog): Promise<CallLog>;
   getCallLogByRetellCallId(retellCallId: string): Promise<CallLog | undefined>;
   updateCallLogByRetellCallId(retellCallId: string, updates: Partial<InsertCallLog>): Promise<CallLog>;
+  markNewCallAlertSent(retellCallId: string, sentAt?: number): Promise<boolean>;
 
   // Attorneys
   getAttorneys(filters?: { q?: string; city?: string; state?: string; specialty?: string }): Promise<Attorney[]>;
@@ -259,6 +260,14 @@ export class ConvexStorage implements IStorage {
     const patch: any = { ...updates };
     const row: any = await client.mutation(api.callLogs.upsertByRetellCallId, { retellCallId, updates: patch });
     return { ...row, createdAt: row.createdAt ? new Date(row.createdAt) : null } as any;
+  }
+
+  async markNewCallAlertSent(retellCallId: string, sentAt?: number): Promise<boolean> {
+    const { client, api } = convexClient();
+    return await client.mutation(api.callLogs.markNewCallAlertSent, {
+      retellCallId,
+      sentAt,
+    });
   }
 
   // -------------------------

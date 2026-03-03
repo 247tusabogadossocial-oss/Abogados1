@@ -5,7 +5,12 @@ import { api } from "@shared/routes";
 import { requireAuth, requireAdmin } from "./auth";
 import bcrypt from "bcryptjs";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { sendAttorneyAssignmentEmail, sendAttorneyDecisionEmail } from "./mailer";
+import {
+  getNewCallAlertRecipients,
+  sendAttorneyAssignmentEmail,
+  sendAttorneyDecisionEmail,
+  sendNewCallAlertEmail,
+} from "./mailer";
 import { openrouter } from "./services/ai";
 import { convexClient } from "./convexClient";
 
@@ -1788,9 +1793,26 @@ if (!recordingUrl && retellCallDetails) {
         ? existingStatus
         : "pendiente";
 
-      await storage.updateCallLogByRetellCallId(callId, {
+      const phoneNumber =
+        pickFirstString(
+          call.from_number,
+          call.fromNumber,
+          payload.from_number,
+          payload.fromNumber,
+          (existingCall as any)?.phoneNumber
+        ) ?? "";
+      const direction =
+        pickFirstString(
+          call.direction,
+          payload.direction,
+          (existingCall as any)?.direction
+        ) ?? undefined;
+
+      const updatedCall = await storage.updateCallLogByRetellCallId(callId, {
         retellCallId: callId,
         status: webhookStatus,
+        phoneNumber: phoneNumber || undefined,
+        direction,
         duration: durationSec,
         recordingUrl:
           recordingUrl ??
@@ -1811,6 +1833,33 @@ if (!recordingUrl && retellCallDetails) {
           undefined,
         analysis: analysis as any,
       });
+
+      if (!existingCall) {
+        try {
+          const alertReserved = await storage.markNewCallAlertSent(callId);
+          if (alertReserved) {
+            const recipients = getNewCallAlertRecipients();
+            await sendNewCallAlertEmail({
+              to: recipients.join(", "),
+              retellCallId: callId,
+              phoneNumber,
+              caseType,
+              location,
+              summary:
+                safeString(analysis?.call_summary) ||
+                safeString(analysis?.post_call_analysis?.call_summary) ||
+                undefined,
+              receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
+            });
+          }
+        } catch (alertErr: any) {
+          console.error(
+            `[RETELL] new call email alert failed for callId=${callId}: ${
+              alertErr?.message ?? "unknown"
+            }`
+          );
+        }
+      }
 
       console.log(
         `[RETELL] processed callId=${callId} hasRecording=${Boolean(
