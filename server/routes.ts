@@ -1692,25 +1692,25 @@ ${JSON.stringify(callsData, null, 2)}
     const event = normalizeEvent(
       payload.event || payload.type || payloadData.event || payloadData.type
     );
+    const inbound = payload.call_inbound || payloadData.call_inbound || payloadData || {};
+    const quickCall = payload.call || payloadData.call || {};
+    const quickCallId = pickFirstString(
+      quickCall.call_id,
+      quickCall.callId,
+      quickCall.id,
+      payloadData.call_id,
+      payloadData.callId,
+      payloadData.id,
+      payload.call_id,
+      payload.callId,
+      payload.id,
+      payloadData.call?.call_id,
+      payloadData.call?.callId,
+      payloadData.call?.id
+    );
 
     try {
       if (isInboundEvent(event)) {
-        const inbound = payload.call_inbound || payloadData.call_inbound || payloadData || {};
-        const fromNumber =
-          pickFirstString(
-            inbound.from_number,
-            inbound.fromNumber,
-            payload.from_number,
-            payload.fromNumber
-          ) ?? "";
-        const toNumber =
-          pickFirstString(
-            inbound.to_number,
-            inbound.toNumber,
-            payload.to_number,
-            payload.toNumber
-          ) ?? "";
-
         const overrideAgentId = pickFirstString(
           inbound.override_agent_id,
           inbound.overrideAgentId,
@@ -1732,33 +1732,57 @@ ${JSON.stringify(callsData, null, 2)}
           payload.agentVersion
         );
 
-        const inboundResponse = {
+        res.status(200).json({
           call_inbound: {
             ...(overrideAgentId ? { override_agent_id: overrideAgentId } : {}),
             ...(overrideAgentVersion ? { override_agent_version: overrideAgentVersion } : {}),
           },
-        };
+        });
+      } else {
+        res.status(200).json({ success: true });
+      }
+    } catch (ackErr: any) {
+      console.error(
+        `[RETELL] webhook ack failed event=${event || "unknown"} callId=${quickCallId || "none"}: ${
+          ackErr?.message ?? "unknown"
+        }`
+      );
+    }
 
-        let persistedInbound:
-          | {
-              placeholder: any;
-              linkedLeadId?: number;
-            }
-          | undefined;
+    void (async () => {
+      try {
+        if (isInboundEvent(event)) {
+          const fromNumber =
+            pickFirstString(
+              inbound.from_number,
+              inbound.fromNumber,
+              payload.from_number,
+              payload.fromNumber
+            ) ?? "";
+          const toNumber =
+            pickFirstString(
+              inbound.to_number,
+              inbound.toNumber,
+              payload.to_number,
+              payload.toNumber
+            ) ?? "";
 
-        if (fromNumber) {
-          persistedInbound = await persistInboundPlaceholderAndLead({
-            fromNumber,
-            toNumber: toNumber || undefined,
-            sourceEvent: event,
-            createdAt: Date.now(),
-          });
-        }
+          let persistedInbound:
+            | {
+                placeholder: any;
+                linkedLeadId?: number;
+              }
+            | undefined;
 
-        res.json(inboundResponse);
+          if (fromNumber) {
+            persistedInbound = await persistInboundPlaceholderAndLead({
+              fromNumber,
+              toNumber: toNumber || undefined,
+              sourceEvent: event,
+              createdAt: Date.now(),
+            });
+          }
 
-        // Email alert is non-critical; keep it async so the phone call is not blocked by SMTP.
-        void (async () => {
           if (!fromNumber) return;
 
           try {
@@ -1807,195 +1831,194 @@ ${JSON.stringify(callsData, null, 2)}
               }`
             );
           }
-        })();
 
-        return;
-      }
+          return;
+        }
 
-      const call = payload.call || payloadData.call || {};
-      const callId = pickFirstString(
-        call.call_id,
-        call.callId,
-        call.id,
-        payloadData.call_id,
-        payloadData.callId,
-        payloadData.id,
-        payloadData.call?.call_id,
-        payloadData.call?.callId,
-        payloadData.call?.id,
-        payload.call_id,
-        payload.callId,
-        payload.id,
-        payloadData?.call?.call_id,
-        payloadData?.call?.callId,
-        payloadData?.call?.id
-      );
-
-      console.log(
-        `[RETELL] webhook path=${req.path} event=${event || "unknown"} callId=${callId || "none"}`
-      );
-
-      if (!callId) {
-        console.warn(
-          `[RETELL] webhook ignored because callId is missing. event=${event || "unknown"} keys=${Object.keys(
-            payload || {}
-          ).join(",")}`
+        const call = payload.call || payloadData.call || {};
+        const callId = pickFirstString(
+          call.call_id,
+          call.callId,
+          call.id,
+          payloadData.call_id,
+          payloadData.callId,
+          payloadData.id,
+          payloadData.call?.call_id,
+          payloadData.call?.callId,
+          payloadData.call?.id,
+          payload.call_id,
+          payload.callId,
+          payload.id,
+          payloadData?.call?.call_id,
+          payloadData?.call?.callId,
+          payloadData?.call?.id
         );
-        return res.json({ success: true });
-      }
 
-      const fromNumber =
-        pickFirstString(
-          call.from_number,
-          call.fromNumber,
-          payloadData.from_number,
-          payloadData.fromNumber,
-          payloadData.call?.from_number,
-          payloadData.call?.fromNumber,
-          payload.from_number,
-          payload.fromNumber
-        ) ?? "";
-      const toNumber =
-        pickFirstString(
-          call.to_number,
-          call.toNumber,
-          payloadData.to_number,
-          payloadData.toNumber,
-          payloadData.call?.to_number,
-          payloadData.call?.toNumber,
-          payload.to_number,
-          payload.toNumber
-        ) ?? "";
-      const direction = normalizeDirection(
-        pickFirstString(
-          call.direction,
-          payloadData.direction,
-          payloadData.call?.direction,
-          payload.direction
-        )
-      );
+        console.log(
+          `[RETELL] webhook path=${req.path} event=${event || "unknown"} callId=${callId || "none"}`
+        );
 
-      if (fromNumber && direction === "inbound") {
-        try {
-          await storage.claimInboundPlaceholder({
+        if (!callId) {
+          console.warn(
+            `[RETELL] webhook ignored because callId is missing. event=${event || "unknown"} keys=${Object.keys(
+              payload || {}
+            ).join(",")}`
+          );
+          return;
+        }
+
+        const fromNumber =
+          pickFirstString(
+            call.from_number,
+            call.fromNumber,
+            payloadData.from_number,
+            payloadData.fromNumber,
+            payloadData.call?.from_number,
+            payloadData.call?.fromNumber,
+            payload.from_number,
+            payload.fromNumber
+          ) ?? "";
+        const toNumber =
+          pickFirstString(
+            call.to_number,
+            call.toNumber,
+            payloadData.to_number,
+            payloadData.toNumber,
+            payloadData.call?.to_number,
+            payloadData.call?.toNumber,
+            payload.to_number,
+            payload.toNumber
+          ) ?? "";
+        const direction = normalizeDirection(
+          pickFirstString(
+            call.direction,
+            payloadData.direction,
+            payloadData.call?.direction,
+            payload.direction
+          )
+        );
+
+        if (fromNumber && direction === "inbound") {
+          try {
+            await storage.claimInboundPlaceholder({
+              retellCallId: callId,
+              fromNumber,
+              toNumber: toNumber || undefined,
+              sourceEvent: event,
+              claimedAt: Date.now(),
+            });
+          } catch (claimErr: any) {
+            console.error(
+              `[RETELL] could not claim inbound placeholder for callId=${callId}: ${
+                claimErr?.message ?? "unknown"
+              }`
+            );
+          }
+        }
+
+        const analysisFromWebhook =
+          call.call_analysis ||
+          payload.call_analysis ||
+          payloadData.call_analysis ||
+          payloadData.call?.call_analysis ||
+          {};
+        const transcriptFromWebhook =
+          safeString(call.transcript) ||
+          safeString(payloadData.transcript) ||
+          safeString(payloadData.call?.transcript) ||
+          safeString(payload.transcript) ||
+          safeString(analysisFromWebhook?.transcript) ||
+          "";
+        const provisionalRecordingUrl = extractRecordingUrl(
+          payload,
+          call,
+          analysisFromWebhook
+        );
+
+        const shouldTryRetellLookup =
+          !!callId &&
+          (isAnalyzedEvent(event) || isFinalEvent(event)) &&
+          !provisionalRecordingUrl;
+
+        const retellCallDetails = shouldTryRetellLookup
+          ? await fetchRetellCallById(callId)
+          : null;
+        console.log(
+          `[RETELL DEBUG] lookup callId=${callId} hasRecording=${Boolean(
+            retellCallDetails?.recording_url ||
+              retellCallDetails?.recordingUrl ||
+              retellCallDetails?.scrubbed_recording_url
+          )}`
+        );
+
+        const analysis =
+          Object.keys(analysisFromWebhook || {}).length > 0
+            ? analysisFromWebhook
+            : retellCallDetails?.call_analysis || {};
+
+        const transcript =
+          transcriptFromWebhook ||
+          safeString(retellCallDetails?.transcript) ||
+          safeString(analysis?.transcript) ||
+          "";
+
+        const durationMs =
+          call.duration_ms ??
+          payloadData.duration_ms ??
+          payloadData.call?.duration_ms ??
+          payload.duration_ms ??
+          0;
+
+        const durationSec =
+          typeof durationMs === "number"
+            ? Math.round(durationMs / 1000)
+            : 0;
+
+        let existingCall = await storage.getCallLogByRetellCallId(callId);
+        if (!existingCall) {
+          existingCall = await storage.updateCallLogByRetellCallId(callId, {
             retellCallId: callId,
-            fromNumber,
+            status: "pendiente",
+            phoneNumber: fromNumber || undefined,
             toNumber: toNumber || undefined,
-            sourceEvent: event,
-            claimedAt: Date.now(),
-          });
-        } catch (claimErr: any) {
-          console.error(
-            `[RETELL] could not claim inbound placeholder for callId=${callId}: ${
-              claimErr?.message ?? "unknown"
-            }`
+            direction,
+            sourceEvent: event || undefined,
+            isPlaceholder: false,
+            duration: durationSec || undefined,
+          } as any);
+        }
+
+        let recordingUrl = extractRecordingUrl(
+          payload,
+          call,
+          analysis,
+          retellCallDetails
+        );
+
+        if (!recordingUrl && retellCallDetails) {
+          recordingUrl = pickFirstString(
+            retellCallDetails.recording_url,
+            retellCallDetails.recordingUrl,
+            retellCallDetails.scrubbed_recording_url,
+            retellCallDetails.recording_multi_channel_url,
+            retellCallDetails.scrubbed_recording_multi_channel_url
           );
         }
-      }
-
-      const analysisFromWebhook =
-        call.call_analysis ||
-        payload.call_analysis ||
-        payloadData.call_analysis ||
-        payloadData.call?.call_analysis ||
-        {};
-      const transcriptFromWebhook =
-        safeString(call.transcript) ||
-        safeString(payloadData.transcript) ||
-        safeString(payloadData.call?.transcript) ||
-        safeString(payload.transcript) ||
-        safeString(analysisFromWebhook?.transcript) ||
-        "";
-      const provisionalRecordingUrl = extractRecordingUrl(
-        payload,
-        call,
-        analysisFromWebhook
-      );
-      
-      const shouldTryRetellLookup =
-  !!callId &&
-  (isAnalyzedEvent(event) || isFinalEvent(event)) &&
-  !provisionalRecordingUrl;
-
-      const retellCallDetails = shouldTryRetellLookup
-        ? await fetchRetellCallById(callId)
-        : null;
-        console.log(
-  `[RETELL DEBUG] lookup callId=${callId} hasRecording=${Boolean(
-    retellCallDetails?.recording_url ||
-    retellCallDetails?.recordingUrl ||
-    retellCallDetails?.scrubbed_recording_url
-  )}`
-);
-
-      const analysis =
-        Object.keys(analysisFromWebhook || {}).length > 0
-          ? analysisFromWebhook
-          : retellCallDetails?.call_analysis || {};
-
-      const transcript =
-        transcriptFromWebhook ||
-        safeString(retellCallDetails?.transcript) ||
-        safeString(analysis?.transcript) ||
-        "";
-
-      const durationMs =
-        call.duration_ms ??
-        payloadData.duration_ms ??
-        payloadData.call?.duration_ms ??
-        payload.duration_ms ??
-        0;
-
-      const durationSec =
-        typeof durationMs === "number"
-          ? Math.round(durationMs / 1000)
-          : 0;
-
-      let existingCall = await storage.getCallLogByRetellCallId(callId);
-      if (!existingCall) {
-        existingCall = await storage.updateCallLogByRetellCallId(callId, {
-          retellCallId: callId,
-          status: "pendiente",
-          phoneNumber: fromNumber || undefined,
-          toNumber: toNumber || undefined,
-          direction,
-          sourceEvent: event || undefined,
-          isPlaceholder: false,
-          duration: durationSec || undefined,
-        } as any);
-      }
-
-      let recordingUrl = extractRecordingUrl(
-  payload,
-  call,
-  analysis,
-  retellCallDetails
-);
-
-if (!recordingUrl && retellCallDetails) {
-  recordingUrl = pickFirstString(
-    retellCallDetails.recording_url,
-    retellCallDetails.recordingUrl,
-    retellCallDetails.scrubbed_recording_url,
-    retellCallDetails.recording_multi_channel_url,
-    retellCallDetails.scrubbed_recording_multi_channel_url
-  );
-}
-      const looksProcessable =
-        isAnalyzedEvent(event) ||
-        isFinalEvent(event) ||
-        !!recordingUrl ||
-        transcript.trim().length > 0 ||
-        Object.keys(analysis || {}).length > 0;
-      const fallbackLeadName =
-        safeString((existingCall as any)?.leadName).trim() ||
-        buildFallbackLeadName(fromNumber);
-      const fallbackCaseType =
-        safeString((existingCall as any)?.caseType).trim() || "General";
-      const fallbackUrgency =
-        safeString((existingCall as any)?.urgency).trim() || "Medium";
-      const normalizedPhoneNumber =
-        pickFirstString(fromNumber, (existingCall as any)?.phoneNumber) ?? "";
+        const looksProcessable =
+          isAnalyzedEvent(event) ||
+          isFinalEvent(event) ||
+          !!recordingUrl ||
+          transcript.trim().length > 0 ||
+          Object.keys(analysis || {}).length > 0;
+        const fallbackLeadName =
+          safeString((existingCall as any)?.leadName).trim() ||
+          buildFallbackLeadName(fromNumber);
+        const fallbackCaseType =
+          safeString((existingCall as any)?.caseType).trim() || "General";
+        const fallbackUrgency =
+          safeString((existingCall as any)?.urgency).trim() || "Medium";
+        const normalizedPhoneNumber =
+          pickFirstString(fromNumber, (existingCall as any)?.phoneNumber) ?? "";
 
       const ensuredLeadId = await ensureLeadLinkedToCall({
         retellCallId: callId,
@@ -2017,286 +2040,282 @@ if (!recordingUrl && retellCallDetails) {
         }
       }
 
-      if (!looksProcessable) {
-        return res.json({ success: true });
-      }
-      const cad = analysis.custom_analysis_data || {};
-      const postData = analysis.post_call_data || {};
-      const leadName = safeString(cad.name, "").trim();
-      const city =
-        pickFirstString(
-          cad.city,
-          cad.ciudad,
-          cad.residence_city,
-          cad.residenceCity,
-          postData.city,
-          postData.ciudad,
-          analysis.city,
-          pickFirstByKeyFragments(cad, ["city", "ciudad", "residence", "residencia"]),
-          pickFirstByKeyFragments(postData, ["city", "ciudad", "residence", "residencia"]),
-          (existingCall as any)?.city
-        ) ?? "";
-      const stateProvince =
-        pickFirstString(
-          cad.state,
-          cad.estado,
-          cad.state_province,
-          cad.province,
-          cad.residence_state,
-          postData.state,
-          postData.estado,
-          postData.state_province,
-          analysis.state,
-          analysis.state_province,
-          pickFirstByKeyFragments(cad, ["state", "estado", "province", "provincia"]),
-          pickFirstByKeyFragments(postData, ["state", "estado", "province", "provincia"]),
-          (existingCall as any)?.stateProvince
-        ) ?? "";
-      const location =
-        pickFirstString(
-          cad.location,
-          cad.ubicacion,
-          cad.residence,
-          cad.residencia,
-          postData.location,
-          postData.ubicacion,
-          analysis.location,
-          pickFirstByKeyFragments(cad, ["location", "ubicacion", "residence", "residencia"]),
-          pickFirstByKeyFragments(postData, ["location", "ubicacion", "residence", "residencia"]),
-          [city, stateProvince].filter(Boolean).join(", ")
-        ) ?? "";
-      const email =
-        pickFirstString(
-          cad.email,
-          cad.correo,
-          postData.email,
-          analysis.email,
-          pickFirstByKeyFragments(cad, ["email", "correo"]),
-          pickFirstByKeyFragments(postData, ["email", "correo"]),
-          (existingCall as any)?.email
-        ) ?? "";
-      const address =
-        pickFirstString(
-          cad.address,
-          cad.direccion,
-          postData.address,
-          postData.direccion,
-          analysis.address,
-          pickFirstByKeyFragments(cad, ["address", "direccion", "street"]),
-          pickFirstByKeyFragments(postData, ["address", "direccion", "street"]),
-          (existingCall as any)?.address
-        ) ?? "";
-      const caseType =
-        pickFirstString(
-          cad.case_type,
-          cad.caseType,
-          cad.tipo_caso,
-          postData.case_type,
-          postData.caseType,
-          analysis.case_type,
-          analysis.caseType,
-          pickFirstByKeyFragments(cad, ["case", "caso", "practice", "matter"]),
-          pickFirstByKeyFragments(postData, ["case", "caso", "practice", "matter"]),
-          (existingCall as any)?.caseType
-        ) ?? "";
-
-      const normalizedName = leadName
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim();
-
-      const isFakeName =
-        !normalizedName ||
-        normalizedName === "ai lead" ||
-        normalizedName === "unknown" ||
-        normalizedName === "test" ||
-        normalizedName.length < 3;
-
-      const hasConversation =
-        transcript.trim().length > 30 &&
-        durationSec > 15;
-
-      const isSuccessful =
-        analysis?.call_successful === true &&
-        analysis?.user_sentiment === "Positive";
-
-      const isValidCall =
-        !isFakeName && hasConversation && isSuccessful;
-      const summaryText =
-        safeString(analysis?.call_summary) ||
-        safeString(analysis?.post_call_analysis?.call_summary) ||
-        undefined;
-
-      const existingStatus = String((existingCall as any)?.status ?? "").toLowerCase();
-      const protectedStatuses = new Set([
-        "pendiente_aprobacion_abogado",
-        "rechazada_por_abogado",
-        "asignada",
-        "en_espera_aceptacion",
-        "finalizado",
-        "closed",
-      ]);
-      const webhookStatus = protectedStatuses.has(existingStatus)
-        ? existingStatus
-        : "pendiente";
-
-      const phoneNumber = normalizedPhoneNumber;
-      const normalizedDirection =
-        pickFirstString(
-          direction,
-          (existingCall as any)?.direction
-        ) ?? undefined;
-
-      const updatedCall = await storage.updateCallLogByRetellCallId(callId, {
-        retellCallId: callId,
-        status: webhookStatus,
-        phoneNumber: phoneNumber || undefined,
-        toNumber: toNumber || (existingCall as any)?.toNumber || undefined,
-        direction: normalizedDirection,
-        sourceEvent: event || (existingCall as any)?.sourceEvent || undefined,
-        isPlaceholder: false,
-        duration: durationSec,
-        recordingUrl:
-          recordingUrl ??
+        if (!looksProcessable) {
+          return;
+        }
+        const cad = analysis.custom_analysis_data || {};
+        const postData = analysis.post_call_data || {};
+        const leadName = safeString(cad.name, "").trim();
+        const city =
           pickFirstString(
-            (existingCall as any)?.recordingUrl,
-            (existingCall as any)?.recording_url
-          ),
-        city,
-        stateProvince,
-        location,
-        email,
-        address,
-        caseType,
-        transcript,
-        summary:
-          summaryText,
-        analysis: analysis as any,
-      });
+            cad.city,
+            cad.ciudad,
+            cad.residence_city,
+            cad.residenceCity,
+            postData.city,
+            postData.ciudad,
+            analysis.city,
+            pickFirstByKeyFragments(cad, ["city", "ciudad", "residence", "residencia"]),
+            pickFirstByKeyFragments(postData, ["city", "ciudad", "residence", "residencia"]),
+            (existingCall as any)?.city
+          ) ?? "";
+        const stateProvince =
+          pickFirstString(
+            cad.state,
+            cad.estado,
+            cad.state_province,
+            cad.province,
+            cad.residence_state,
+            postData.state,
+            postData.estado,
+            postData.state_province,
+            analysis.state,
+            analysis.state_province,
+            pickFirstByKeyFragments(cad, ["state", "estado", "province", "provincia"]),
+            pickFirstByKeyFragments(postData, ["state", "estado", "province", "provincia"]),
+            (existingCall as any)?.stateProvince
+          ) ?? "";
+        const location =
+          pickFirstString(
+            cad.location,
+            cad.ubicacion,
+            cad.residence,
+            cad.residencia,
+            postData.location,
+            postData.ubicacion,
+            analysis.location,
+            pickFirstByKeyFragments(cad, ["location", "ubicacion", "residence", "residencia"]),
+            pickFirstByKeyFragments(postData, ["location", "ubicacion", "residence", "residencia"]),
+            [city, stateProvince].filter(Boolean).join(", ")
+          ) ?? "";
+        const email =
+          pickFirstString(
+            cad.email,
+            cad.correo,
+            postData.email,
+            analysis.email,
+            pickFirstByKeyFragments(cad, ["email", "correo"]),
+            pickFirstByKeyFragments(postData, ["email", "correo"]),
+            (existingCall as any)?.email
+          ) ?? "";
+        const address =
+          pickFirstString(
+            cad.address,
+            cad.direccion,
+            postData.address,
+            postData.direccion,
+            analysis.address,
+            pickFirstByKeyFragments(cad, ["address", "direccion", "street"]),
+            pickFirstByKeyFragments(postData, ["address", "direccion", "street"]),
+            (existingCall as any)?.address
+          ) ?? "";
+        const caseType =
+          pickFirstString(
+            cad.case_type,
+            cad.caseType,
+            cad.tipo_caso,
+            postData.case_type,
+            postData.caseType,
+            analysis.case_type,
+            analysis.caseType,
+            pickFirstByKeyFragments(cad, ["case", "caso", "practice", "matter"]),
+            pickFirstByKeyFragments(postData, ["case", "caso", "practice", "matter"]),
+            (existingCall as any)?.caseType
+          ) ?? "";
 
-      const alertAlreadySent =
-        typeof (existingCall as any)?.newCallAlertSentAt === "number" ||
-        hasRecentNewCallAlert(callId);
+        const normalizedName = leadName
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
 
-      if (!alertAlreadySent) {
-        try {
-          await sendNewCallAlertEmail({
-            to: "247tusabogadossocial@gmail.com",
-            retellCallId: callId,
-            phoneNumber,
-            caseType,
-            location,
-            summary: summaryText,
-            receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
-          });
-          rememberNewCallAlert(callId);
+        const isFakeName =
+          !normalizedName ||
+          normalizedName === "ai lead" ||
+          normalizedName === "unknown" ||
+          normalizedName === "test" ||
+          normalizedName.length < 3;
 
+        const hasConversation =
+          transcript.trim().length > 30 &&
+          durationSec > 15;
+
+        const isSuccessful =
+          analysis?.call_successful === true &&
+          analysis?.user_sentiment === "Positive";
+
+        const isValidCall =
+          !isFakeName && hasConversation && isSuccessful;
+        const summaryText =
+          safeString(analysis?.call_summary) ||
+          safeString(analysis?.post_call_analysis?.call_summary) ||
+          undefined;
+
+        const existingStatus = String((existingCall as any)?.status ?? "").toLowerCase();
+        const protectedStatuses = new Set([
+          "pendiente_aprobacion_abogado",
+          "rechazada_por_abogado",
+          "asignada",
+          "en_espera_aceptacion",
+          "finalizado",
+          "closed",
+        ]);
+        const webhookStatus = protectedStatuses.has(existingStatus)
+          ? existingStatus
+          : "pendiente";
+
+        const phoneNumber = normalizedPhoneNumber;
+        const normalizedDirection =
+          pickFirstString(
+            direction,
+            (existingCall as any)?.direction
+          ) ?? undefined;
+
+        const updatedCall = await storage.updateCallLogByRetellCallId(callId, {
+          retellCallId: callId,
+          status: webhookStatus,
+          phoneNumber: phoneNumber || undefined,
+          toNumber: toNumber || (existingCall as any)?.toNumber || undefined,
+          direction: normalizedDirection,
+          sourceEvent: event || (existingCall as any)?.sourceEvent || undefined,
+          isPlaceholder: false,
+          duration: durationSec,
+          recordingUrl:
+            recordingUrl ??
+            pickFirstString(
+              (existingCall as any)?.recordingUrl,
+              (existingCall as any)?.recording_url
+            ),
+          city,
+          stateProvince,
+          location,
+          email,
+          address,
+          caseType,
+          transcript,
+          summary: summaryText,
+          analysis: analysis as any,
+        });
+
+        const alertAlreadySent =
+          typeof (existingCall as any)?.newCallAlertSentAt === "number" ||
+          hasRecentNewCallAlert(callId);
+
+        if (!alertAlreadySent) {
           try {
-            await storage.updateCallLogByRetellCallId(callId, {
-              newCallAlertSentAt: Date.now(),
-            } as any);
-          } catch (markErr: any) {
-            console.warn(
-              `[RETELL] could not persist new call alert flag for callId=${callId}: ${
-                markErr?.message ?? "unknown"
+            await sendNewCallAlertEmail({
+              to: "247tusabogadossocial@gmail.com",
+              retellCallId: callId,
+              phoneNumber,
+              caseType,
+              location,
+              summary: summaryText,
+              receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
+            });
+            rememberNewCallAlert(callId);
+
+            try {
+              await storage.updateCallLogByRetellCallId(callId, {
+                newCallAlertSentAt: Date.now(),
+              } as any);
+            } catch (markErr: any) {
+              console.warn(
+                `[RETELL] could not persist new call alert flag for callId=${callId}: ${
+                  markErr?.message ?? "unknown"
+                }`
+              );
+            }
+          } catch (alertErr: any) {
+            console.error(
+              `[RETELL] new call email alert failed for callId=${callId}: ${
+                alertErr?.message ?? "unknown"
               }`
             );
           }
-        } catch (alertErr: any) {
-          console.error(
-            `[RETELL] new call email alert failed for callId=${callId}: ${
-              alertErr?.message ?? "unknown"
-            }`
-          );
         }
-      }
 
-      console.log(
-        `[RETELL] processed callId=${callId} hasRecording=${Boolean(
-          recordingUrl
-        )} transcriptLen=${transcript.length}`
-      );
+        console.log(
+          `[RETELL] processed callId=${callId} hasRecording=${Boolean(
+            recordingUrl
+          )} transcriptLen=${transcript.length}`
+        );
 
-      let leadId =
-        Number(
-          (updatedCall as any)?.leadId ??
-            (existingCall as any)?.leadId ??
-            ensuredLeadId ??
-            0
-        ) || undefined;
-      let existing =
-        Number.isFinite(leadId) && leadId! > 0
-          ? await storage.getLead(leadId!)
-          : await storage.getLeadByRetellCallId(callId);
+        let leadId =
+          Number(
+            (updatedCall as any)?.leadId ??
+              (existingCall as any)?.leadId ??
+              ensuredLeadId ??
+              0
+          ) || undefined;
+        let existing =
+          Number.isFinite(leadId) && leadId! > 0
+            ? await storage.getLead(leadId!)
+            : await storage.getLeadByRetellCallId(callId);
 
-      if (!existing) {
-        const ensuredLeadId = await ensureLeadLinkedToCall({
+        if (!existing) {
+          const ensuredLeadId = await ensureLeadLinkedToCall({
+            retellCallId: callId,
+            existingLeadId: leadId,
+            phoneNumber,
+            name: leadName,
+            caseType,
+            urgency: safeString(cad.urgency, "Medium"),
+            transcript,
+            summary: summaryText,
+            status: webhookStatus,
+          });
+
+          if (Number.isFinite(ensuredLeadId) && ensuredLeadId! > 0) {
+            leadId = ensuredLeadId;
+            existing = await storage.getLead(ensuredLeadId!);
+            await storage.updateCallLogByRetellCallId(callId, {
+              leadId: ensuredLeadId,
+            } as any);
+          }
+        } else {
+          leadId = existing.id;
+          const updatedCallLeadId = Number((updatedCall as any)?.leadId ?? 0);
+          if (!Number.isFinite(updatedCallLeadId) || updatedCallLeadId <= 0) {
+            await storage.updateCallLogByRetellCallId(callId, {
+              leadId: existing.id,
+            } as any);
+          }
+        }
+
+        if (!isValidCall) {
+          return;
+        }
+
+        const leadPayload = {
           retellCallId: callId,
-          existingLeadId: leadId,
-          phoneNumber,
           name: leadName,
-          caseType,
+          phone: phoneNumber || "Sin numero",
+          caseType: caseType || "General",
           urgency: safeString(cad.urgency, "Medium"),
           transcript,
           summary: summaryText,
-          status: webhookStatus,
+          status: mapStatusFromAnalysis(analysis),
+        };
+
+        if (existing) {
+          const updated = await storage.updateLead(
+            existing.id,
+            leadPayload
+          );
+          leadId = updated.id;
+        } else {
+          const created = await storage.createLead(
+            leadPayload as any
+          );
+          leadId = created.id;
+        }
+
+        await storage.updateCallLogByRetellCallId(callId, {
+          leadId,
         });
-
-        if (Number.isFinite(ensuredLeadId) && ensuredLeadId! > 0) {
-          leadId = ensuredLeadId;
-          existing = await storage.getLead(ensuredLeadId!);
-          await storage.updateCallLogByRetellCallId(callId, {
-            leadId: ensuredLeadId,
-          } as any);
-        }
-      } else {
-        leadId = existing.id;
-        const updatedCallLeadId = Number((updatedCall as any)?.leadId ?? 0);
-        if (!Number.isFinite(updatedCallLeadId) || updatedCallLeadId <= 0) {
-          await storage.updateCallLogByRetellCallId(callId, {
-            leadId: existing.id,
-          } as any);
-        }
+      } catch (err) {
+        console.error("[RETELL] background webhook error:", err);
       }
-
-      if (!isValidCall) {
-        return res.json({ success: true });
-      }
-
-      const leadPayload = {
-        retellCallId: callId,
-        name: leadName,
-        phone: phoneNumber || "Sin numero",
-        caseType: caseType || "General",
-        urgency: safeString(cad.urgency, "Medium"),
-        transcript,
-        summary: summaryText,
-        status: mapStatusFromAnalysis(analysis),
-      };
-
-      if (existing) {
-        const updated = await storage.updateLead(
-          existing.id,
-          leadPayload
-        );
-        leadId = updated.id;
-      } else {
-        const created = await storage.createLead(
-          leadPayload as any
-        );
-        leadId = created.id;
-      }
-
-      await storage.updateCallLogByRetellCallId(callId, {
-        leadId,
-      });
-
-      return res.json({ success: true });
-
-    } catch (err) {
-      console.error("Webhook Error:", err);
-      return res.status(200).json({ success: false });
-    }
+    })();
   };
 
   // Keep compatibility with old and current Retell webhook URLs.

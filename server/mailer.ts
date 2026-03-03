@@ -36,10 +36,15 @@ function mustEnv(name: string) {
   return v;
 }
 
+const smtpTimeoutMs = Number(process.env.SMTP_TIMEOUT_MS ?? "8000");
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST ?? "smtp.gmail.com",
   port: Number(process.env.SMTP_PORT ?? "587"),
   secure: false,
+  connectionTimeout: smtpTimeoutMs,
+  greetingTimeout: smtpTimeoutMs,
+  socketTimeout: smtpTimeoutMs,
   auth: {
     user: mustEnv("SMTP_USER"),
     pass: mustEnv("SMTP_PASS"),
