@@ -11,6 +11,7 @@ import {
   sendNewCallAlertEmail,
   getNewCallAlertRecipients,
 } from "./mailer";
+import { notifyNtfyNewCall } from "./ntfy";
 import { openrouter } from "./services/ai";
 import { convexClient } from "./convexClient";
 
@@ -2272,29 +2273,69 @@ ${JSON.stringify(callsData, null, 2)}
 
         if (!alertAlreadySent) {
           const recipients = getNewCallAlertRecipients();
-          if (recipients.length > 0) {
+          const shouldSendEmail = recipients.length > 0;
+          const shouldSendNtfy = safeString(process.env.NTFY_TOPIC_URL).trim().length > 0;
+
+          if (shouldSendEmail || shouldSendNtfy) {
             inFlightNewCallAlertIds.add(callId);
             void (async () => {
+              let sentAny = false;
               try {
-                await sendNewCallAlertEmail({
-                  to: recipients,
-                  retellCallId: callId,
-                  phoneNumber: resolvedPhone,
-                  caseType: resolvedCaseType,
-                  location,
-                  summary: summaryText,
-                  receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
-                });
-                rememberNewCallAlert(callId);
-                await storage.updateCallLogByRetellCallId(callId, {
-                  newCallAlertSentAt: Date.now(),
-                } as any);
-              } catch (alertErr: any) {
-                console.error(
-                  `[RETELL] new call email alert failed for callId=${callId}: ${
-                    alertErr?.message ?? "unknown"
-                  }`
-                );
+                if (shouldSendEmail) {
+                  try {
+                    await sendNewCallAlertEmail({
+                      to: recipients,
+                      retellCallId: callId,
+                      phoneNumber: resolvedPhone,
+                      caseType: resolvedCaseType,
+                      location,
+                      summary: summaryText,
+                      receivedAt: (updatedCall as any)?.createdAt ?? Date.now(),
+                    });
+                    sentAny = true;
+                  } catch (alertErr: any) {
+                    console.error(
+                      `[RETELL] new call email alert failed for callId=${callId}: ${
+                        alertErr?.message ?? "unknown"
+                      }`
+                    );
+                  }
+                }
+
+                if (shouldSendNtfy) {
+                  try {
+                    const practiceArea = pickFirstString(
+                      safeString((existing as any)?.practiceArea).trim() || undefined,
+                      safeString((cad as any)?.practiceArea).trim() || undefined,
+                      safeString((cad as any)?.practice_area).trim() || undefined,
+                      safeString((postData as any)?.practiceArea).trim() || undefined,
+                      safeString((postData as any)?.practice_area).trim() || undefined
+                    );
+
+                    await notifyNtfyNewCall({
+                      leadName: resolvedLeadName,
+                      phone: resolvedPhone,
+                      caseType: resolvedCaseType,
+                      practiceArea,
+                      urgency: resolvedUrgency,
+                      callId,
+                    });
+                    sentAny = true;
+                  } catch (ntfyErr: any) {
+                    console.error(
+                      `[RETELL] ntfy alert failed for callId=${callId}: ${
+                        ntfyErr?.message ?? "unknown"
+                      }`
+                    );
+                  }
+                }
+
+                if (sentAny) {
+                  rememberNewCallAlert(callId);
+                  await storage.updateCallLogByRetellCallId(callId, {
+                    newCallAlertSentAt: Date.now(),
+                  } as any);
+                }
               } finally {
                 inFlightNewCallAlertIds.delete(callId);
               }
