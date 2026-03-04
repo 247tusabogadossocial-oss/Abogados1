@@ -36,13 +36,20 @@ function formatDuration(seconds?: number | null) {
   return `${m}m ${r}s`;
 }
 
-function StatusBadge({ status }: { status?: string | null }) {
+function StatusBadge({
+  status,
+  assignmentStatus,
+}: {
+  status?: string | null;
+  assignmentStatus?: string | null;
+}) {
   const s = (status ?? "pendiente").toLowerCase();
+  const as = (assignmentStatus ?? "").toLowerCase();
 
   if (s === "pendiente_aprobacion_abogado") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-orange-50 px-3 py-1 text-xs font-medium text-orange-700 dark:bg-orange-950/30 dark:text-orange-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-3 py-1 text-xs font-medium text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-orange-600" />
         Pendiente por aprobacion del abogado
       </span>
     );
@@ -50,8 +57,8 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "pendiente") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-700 dark:bg-yellow-950/30 dark:text-yellow-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-600" />
         Pendiente
       </span>
     );
@@ -59,17 +66,26 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "en_espera_aceptacion") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
         En espera de aceptacion
       </span>
     );
   }
 
   if (s === "asignada") {
+    if (as === "delivered") {
+      return (
+        <span className="inline-flex items-center gap-2 rounded-full bg-sky-100 px-3 py-1 text-xs font-medium text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">
+          <span className="h-1.5 w-1.5 rounded-full bg-sky-600" />
+          Caso enviado al abogado
+        </span>
+      );
+    }
+
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-950/30 dark:text-green-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800 dark:bg-green-900/40 dark:text-green-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-600" />
         Aceptada por abogado
       </span>
     );
@@ -77,8 +93,8 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "finalizado") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-900/30 dark:text-slate-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
         Finalizado
       </span>
     );
@@ -86,8 +102,8 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "rechazada_por_abogado") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-red-600" />
         Reasignar
       </span>
     );
@@ -449,6 +465,8 @@ type CallCardProps = {
   onAssign?: () => void;
   onSendToAttorney?: () => void;
   sendingToAttorney?: boolean;
+  idx?: number;
+  toneOffset?: number;
 };
 
 function CallCard({
@@ -457,26 +475,39 @@ function CallCard({
   onAssign,
   onSendToAttorney,
   sendingToAttorney,
+  idx = 0,
+  toneOffset = 0,
 }: CallCardProps) {
+  const tinted = (idx + toneOffset) % 2 === 0;
+  const cardTone = tinted
+    ? "border-sky-200 bg-sky-50/70 hover:bg-sky-100/70"
+    : "border-border/60 bg-white hover:bg-slate-50/80";
+  const actionButtonClass =
+    "inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-white/80 px-3 py-2 text-xs font-semibold text-sky-800 transition-colors duration-200 hover:border-blue-400 hover:bg-blue-600 hover:text-white";
+
   return (
-    <div className="group rounded-2xl border border-border/50 bg-card/60 p-5 shadow-sm hover:shadow-md hover:bg-card transition">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-3">
+    <div className={`group rounded-2xl border p-5 shadow-sm transition-colors ${cardTone}`}>
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="font-semibold truncate">
               {call.leadName ?? "AI Lead"}
             </span>
-            <StatusBadge status={call.status ?? "ended"} />
+            <StatusBadge
+              status={call.status ?? "ended"}
+              assignmentStatus={call.assignmentStatus}
+            />
           </div>
         </div>
 
-        <div className="flex gap-2 shrink-0">
+        <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-2 self-start">
           <button
             type="button"
             onClick={onView}
-            className="inline-flex items-center rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/60 transition"
+            className={actionButtonClass}
           >
             Ver detalles
+            <ChevronRight className="h-4 w-4" />
           </button>
 
           {onSendToAttorney ? (
@@ -484,7 +515,7 @@ function CallCard({
               type="button"
               disabled={!!sendingToAttorney}
               onClick={onSendToAttorney}
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm bg-primary text-primary-foreground hover:opacity-90 transition"
+              className={`${actionButtonClass} disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-sky-200 disabled:hover:bg-white/80 disabled:hover:text-sky-800`}
             >
               <Send className="h-4 w-4" />
               {sendingToAttorney ? "Enviando..." : "Enviar a abogado"}
@@ -493,7 +524,7 @@ function CallCard({
             <button
               type="button"
               onClick={onAssign}
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm bg-primary text-primary-foreground hover:opacity-90 transition"
+              className={actionButtonClass}
             >
               <Gavel className="h-4 w-4" />
               Asignar abogado
@@ -521,7 +552,9 @@ function CallCard({
       </div>
 
       <div className="mt-3 text-sm text-foreground/80 leading-relaxed line-clamp-2 min-h-[2.75rem]">
-        {getCallSummary(call) || "Sin resumen disponible para esta llamada."}
+        {String(call?.retellCallId ?? "").startsWith("manual-")
+          ? "Haz clic para ver el formulario completo del caso."
+          : getCallSummary(call) || "Sin resumen disponible para esta llamada."}
       </div>
     </div>
   );
@@ -1360,10 +1393,12 @@ export default function CallLogs() {
                         </div>
                       )}
 
-                      {completeLogs.map((l: any) => (
+                      {completeLogs.map((l: any, idx: number) => (
                         <CallCard
                           key={l.id}
                           call={l}
+                          idx={idx}
+                          toneOffset={(completePage - 1) * ITEMS_PER_PAGE}
                           onView={() => {
                             setSelected(l);
                             setOpen(true);
@@ -1443,10 +1478,12 @@ export default function CallLogs() {
                         </div>
                       )}
 
-                      {incompleteLogs.map((l: any) => (
+                      {incompleteLogs.map((l: any, idx: number) => (
                         <CallCard
                           key={l.id}
                           call={l}
+                          idx={idx}
+                          toneOffset={(incompletePage - 1) * ITEMS_PER_PAGE}
                           onView={() => {
                             setSelected(l);
                             setOpen(true);
@@ -1526,10 +1563,12 @@ export default function CallLogs() {
                         </div>
                       )}
 
-                      {manualLogs.map((l: any) => (
+                      {manualLogs.map((l: any, idx: number) => (
                         <CallCard
                           key={l.id}
                           call={l}
+                          idx={idx}
+                          toneOffset={(manualPage - 1) * ITEMS_PER_PAGE}
                           onView={() => {
                             setSelected(l);
                             setOpen(true);
@@ -1615,10 +1654,10 @@ export default function CallLogs() {
 
               {selected && (
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
-                    <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                    {selected.status ?? "ended"}
-                  </span>
+                  <StatusBadge
+                    status={selected.status ?? "ended"}
+                    assignmentStatus={selected.assignmentStatus}
+                  />
 
                   <span className="flex items-center gap-1">
                     <Clock className="h-4 w-4 opacity-60" />

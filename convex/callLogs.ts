@@ -104,12 +104,31 @@ export const listWithLead = query({
   handler: async (ctx) => {
     const logs = await ctx.db.query("callLogs").collect();
     const leads = await ctx.db.query("leads").collect();
+    const intakes = await ctx.db.query("intakes").collect();
 
     const leadById = new Map(leads.map((l) => [l.id, l]));
+    const latestIntakeByLeadId = new Map<number, any>();
+
+    for (const intake of intakes) {
+      const leadId = Number((intake as any)?.leadId ?? 0);
+      if (!Number.isFinite(leadId) || leadId <= 0) continue;
+
+      const updatedAt = Number((intake as any)?.updatedAt ?? (intake as any)?.createdAt ?? 0);
+      const current = latestIntakeByLeadId.get(leadId);
+      const currentUpdatedAt = Number(
+        (current as any)?.updatedAt ?? (current as any)?.createdAt ?? 0
+      );
+
+      if (!current || updatedAt >= currentUpdatedAt) {
+        latestIntakeByLeadId.set(leadId, intake);
+      }
+    }
 
     return logs
       .map((log) => {
         const lead = log.leadId != null ? leadById.get(log.leadId) : undefined;
+        const intake =
+          log.leadId != null ? latestIntakeByLeadId.get(Number(log.leadId)) : undefined;
         const recordingUrl =
           (log as any).recordingUrl ??
           (log as any).recording_url ??
@@ -159,6 +178,11 @@ export const listWithLead = query({
           leadCity: lead?.city ?? log.city ?? null,
           leadAge: (lead as any)?.age ?? null,
           leadStatus: lead?.status ?? null,
+          intake: intake ?? null,
+          intakeData:
+            intake && typeof (intake as any)?.data === "object" && (intake as any)?.data != null
+              ? (intake as any).data
+              : null,
         };
       })
       .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));

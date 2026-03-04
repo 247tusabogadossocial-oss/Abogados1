@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Clock, Phone, FileText, Copy, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
@@ -73,12 +74,139 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 const norm = (v: any) => String(v ?? "").trim().toLowerCase();
 
+function cleanText(value: any): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    return decodeURIComponent(escape(raw)).trim();
+  } catch {
+    return raw.trim();
+  }
+}
+
 function firstText(...values: any[]): string {
   for (const value of values) {
-    const text = String(value ?? "").trim();
+    const text = cleanText(value);
     if (text) return text;
   }
   return "";
+}
+
+function findByKeyFragments(source: any, fragments: string[]): string {
+  if (!source || typeof source !== "object") return "";
+
+  for (const [rawKey, rawValue] of Object.entries(source)) {
+    if (typeof rawValue !== "string") continue;
+    const key = String(rawKey).toLowerCase();
+    if (!fragments.some((fragment) => key.includes(fragment))) continue;
+    const text = firstText(rawValue);
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function normalizeKey(value: string): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function digitsOnly(value: string): string {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function isLikelyPhone(value: string): boolean {
+  const digits = digitsOnly(value);
+  return digits.length >= 7 && digits.length <= 15;
+}
+
+function formatManualFieldLabel(key: string): string {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatManualFieldValue(value: any): string {
+  if (value == null) return "-";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+
+  if (typeof value === "string") {
+    const text = firstText(value);
+    return text || "-";
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) return "-";
+    return value
+      .map((item) => formatManualFieldValue(item))
+      .filter((item) => item && item !== "-")
+      .join(", ");
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "-";
+    }
+  }
+
+  return String(value);
+}
+
+function getManualValueByKeyCandidates(
+  data: Record<string, any>,
+  keys: string[],
+  options?: { requirePhone?: boolean }
+): string {
+  const requirePhone = Boolean(options?.requirePhone);
+  const wanted = keys.map((key) => normalizeKey(key));
+  const entries = Object.entries(data ?? {});
+
+  const pick = (value: any) => {
+    const text = firstText(value);
+    if (!text) return "";
+    if (requirePhone && !isLikelyPhone(text)) return "";
+    return text;
+  };
+
+  for (const [rawKey, rawValue] of entries) {
+    if (wanted.includes(normalizeKey(rawKey))) {
+      const text = pick(rawValue);
+      if (text) return text;
+    }
+  }
+
+  for (const [rawKey, rawValue] of entries) {
+    const normalized = normalizeKey(rawKey);
+    if (!wanted.some((candidate) => normalized.includes(candidate))) continue;
+    const text = pick(rawValue);
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function getManualIntakeData(call: any): Record<string, any> {
+  const direct = call?.intakeData;
+  if (direct && typeof direct === "object") return direct;
+
+  const nested = call?.intake?.data;
+  if (nested && typeof nested === "object") return nested;
+
+  return {};
+}
+
+function isManualCall(call: any): boolean {
+  const retellCallId = String(call?.retellCallId ?? call?.call_id ?? call?.callId ?? "").trim();
+  const direction = String(call?.direction ?? "").trim().toLowerCase();
+  return retellCallId.startsWith("manual-") || direction === "manual";
 }
 
 function getCallSummary(call: any): string {
@@ -114,28 +242,53 @@ function getAnalysisSuccessLabel(call: any): string {
 }
 
 function getCallCity(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.city,
+    call?.leadCity,
     call?.analysis?.city,
     call?.analysis?.post_call_data?.city,
     call?.post_call_data?.city,
     call?.extracted?.city,
-    call?.analysis?.custom_analysis_data?.city
+    call?.analysis?.custom_analysis_data?.city,
+    cad?.ciudad,
+    cad?.residence_city,
+    cad?.client_city,
+    getManualValueByKeyCandidates(manualData, ["city", "ciudad", "residenceCity", "clientCity"]),
+    findByKeyFragments(cad, ["city", "ciudad", "residence", "residencia"]),
+    findByKeyFragments(postData, ["city", "ciudad", "residence", "residencia"]),
+    findByKeyFragments(manualData, ["city", "ciudad", "residence", "residencia"])
   );
 }
 
 function getCallCaseType(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.caseType,
     call?.case_type,
     call?.analysis?.case_type,
     call?.analysis?.caseType,
     call?.analysis?.post_call_data?.case_type,
-    call?.analysis?.custom_analysis_data?.case_type
+    call?.analysis?.custom_analysis_data?.case_type,
+    getManualValueByKeyCandidates(manualData, ["caseType", "case_type", "practiceArea"]),
+    cad?.tipo_caso,
+    findByKeyFragments(cad, ["case", "caso", "practice", "matter"]),
+    findByKeyFragments(postData, ["case", "caso", "practice", "matter"]),
+    findByKeyFragments(manualData, ["case", "caso", "practice", "matter"])
   );
 }
 
 function getCallState(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.stateProvince,
     call?.state,
@@ -144,43 +297,98 @@ function getCallState(call: any): string {
     call?.analysis?.post_call_data?.state,
     call?.analysis?.post_call_data?.state_province,
     call?.analysis?.custom_analysis_data?.state,
-    call?.analysis?.custom_analysis_data?.state_province
+    call?.analysis?.custom_analysis_data?.state_province,
+    cad?.estado,
+    cad?.province,
+    cad?.residence_state,
+    cad?.residence_state_province,
+    getManualValueByKeyCandidates(manualData, [
+      "stateProvince",
+      "state",
+      "estado",
+      "residenceState",
+      "state_province",
+    ]),
+    findByKeyFragments(cad, ["state", "estado", "province", "provincia"]),
+    findByKeyFragments(postData, ["state", "estado", "province", "provincia"]),
+    findByKeyFragments(manualData, ["state", "estado", "province", "provincia"])
   );
 }
 
 function getCallLocation(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.location,
     call?.analysis?.location,
     call?.analysis?.post_call_data?.location,
     call?.analysis?.custom_analysis_data?.location,
-    call?.analysis?.custom_analysis_data?.ubicacion
+    call?.analysis?.custom_analysis_data?.ubicacion,
+    cad?.residencia,
+    cad?.residence,
+    getManualValueByKeyCandidates(manualData, ["location", "ubicacion"]),
+    findByKeyFragments(cad, ["location", "ubicacion", "residence", "residencia"]),
+    findByKeyFragments(postData, ["location", "ubicacion", "residence", "residencia"]),
+    findByKeyFragments(manualData, ["location", "ubicacion", "residence", "residencia"])
   );
 }
 
 function getCallEmail(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.email,
     call?.leadEmail,
     call?.analysis?.email,
     call?.analysis?.post_call_data?.email,
     call?.analysis?.custom_analysis_data?.email,
-    call?.analysis?.custom_analysis_data?.correo
+    call?.analysis?.custom_analysis_data?.correo,
+    getManualValueByKeyCandidates(manualData, ["email", "correo"]),
+    findByKeyFragments(cad, ["email", "correo"]),
+    findByKeyFragments(postData, ["email", "correo"]),
+    findByKeyFragments(manualData, ["email", "correo"])
   );
 }
 
 function getCallAddress(call: any): string {
+  const cad = call?.analysis?.custom_analysis_data ?? {};
+  const postData = call?.analysis?.post_call_data ?? call?.post_call_data ?? {};
+  const manualData = getManualIntakeData(call);
+
   return firstText(
     call?.address,
     call?.analysis?.address,
     call?.analysis?.post_call_data?.address,
     call?.analysis?.custom_analysis_data?.address,
-    call?.analysis?.custom_analysis_data?.direccion
+    call?.analysis?.custom_analysis_data?.direccion,
+    getManualValueByKeyCandidates(manualData, ["address", "direccion"]),
+    findByKeyFragments(cad, ["address", "direccion", "street"]),
+    findByKeyFragments(postData, ["address", "direccion", "street"]),
+    findByKeyFragments(manualData, ["address", "direccion", "street"])
   );
 }
 
 function getCallCaseNotes(call: any): string {
-  return firstText(call?.caseNotes);
+  const manualData = getManualIntakeData(call);
+  return firstText(
+    call?.caseNotes,
+    getManualValueByKeyCandidates(manualData, ["caseNotes", "deadlineNotes", "narrative"])
+  );
+}
+
+function getCallLocationLabel(call: any): string {
+  const location = getCallLocation(call);
+  if (location) return location;
+
+  const city = getCallCity(call);
+  const state = getCallState(call);
+  if (city && state) return `${city}, ${state}`;
+
+  return city || state || "Ubicacion pendiente";
 }
 
 function normalizeExtraFields(
@@ -201,6 +409,167 @@ function Field({ label, value }: { label: string; value: any }) {
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="font-medium">{String(value ?? "").trim() || "-"}</div>
     </div>
+  );
+}
+
+function getManualClientEntries(call: any) {
+  const manualData = getManualIntakeData(call);
+  const firstName = getManualValueByKeyCandidates(manualData, [
+    "firstName",
+    "first_name",
+    "nombre",
+  ]);
+  const lastName = getManualValueByKeyCandidates(manualData, [
+    "lastName",
+    "last_name",
+    "surname",
+    "apellido",
+    "apellidos",
+  ]);
+  const name = firstText(
+    getManualValueByKeyCandidates(manualData, ["name", "fullName", "clientName"]),
+    [firstName, lastName].filter(Boolean).join(" ").trim(),
+    firstName,
+    call?.leadName
+  );
+  const phone = getManualValueByKeyCandidates(
+    manualData,
+    ["phone", "phoneNumber", "callerPhone", "telefono", "tel", "cell", "cel", "mobile"],
+    { requirePhone: true }
+  );
+  const email = getManualValueByKeyCandidates(manualData, ["email", "correo"]);
+  const address = getManualValueByKeyCandidates(manualData, ["address", "direccion"]);
+  const city = getManualValueByKeyCandidates(manualData, ["city", "ciudad"]);
+  const state = getManualValueByKeyCandidates(manualData, [
+    "stateProvince",
+    "state",
+    "estado",
+  ]);
+  const county = getManualValueByKeyCandidates(manualData, ["county"]);
+
+  return [
+    { key: "name", label: "Name", value: formatManualFieldValue(name) },
+    { key: "phone", label: "Phone", value: formatManualFieldValue(phone) },
+    { key: "email", label: "Email", value: formatManualFieldValue(email) },
+    { key: "address", label: "Address", value: formatManualFieldValue(address) },
+    { key: "city", label: "City", value: formatManualFieldValue(city) },
+    { key: "state", label: "State", value: formatManualFieldValue(state) },
+    { key: "county", label: "County", value: formatManualFieldValue(county) },
+  ];
+}
+
+function getManualCaseEntries(call: any) {
+  const manualData = getManualIntakeData(call);
+  const clientFieldKeys = new Set(
+    [
+      "name",
+      "fullname",
+      "clientname",
+      "firstname",
+      "lastname",
+      "surname",
+      "apellido",
+      "apellidos",
+      "phone",
+      "phonenumber",
+      "callerphone",
+      "telefono",
+      "tel",
+      "cell",
+      "cel",
+      "mobile",
+      "email",
+      "correo",
+      "address",
+      "direccion",
+      "city",
+      "ciudad",
+      "stateprovince",
+      "state",
+      "estado",
+      "county",
+      "location",
+      "ubicacion",
+    ].map((key) => normalizeKey(key))
+  );
+
+  return Object.entries(manualData)
+    .filter(([key]) => !clientFieldKeys.has(normalizeKey(key)))
+    .map(([key, value]) => ({
+      key,
+      label: formatManualFieldLabel(key),
+      value: formatManualFieldValue(value),
+    }));
+}
+
+function renderManualCallForm(call: any) {
+  const manualData = getManualIntakeData(call);
+  const intake = call?.intake;
+  const manualClientEntries = getManualClientEntries(call);
+  const manualCaseEntries = getManualCaseEntries(call);
+
+  if (!intake && Object.keys(manualData).length === 0) {
+    return (
+      <div className="text-muted-foreground">
+        No hay informacion disponible del formulario manual.
+      </div>
+    );
+  }
+
+  return (
+    <Card className="rounded-2xl border-border/60 shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-base">Formulario del caso manual</CardTitle>
+      </CardHeader>
+
+      <CardContent className="space-y-3 text-sm">
+        <div className="rounded-xl border border-border/60 bg-muted/10 p-4 space-y-4">
+          <div className="text-sm font-semibold">Vista completa del formulario</div>
+
+          <div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">
+              Informacion del cliente
+            </div>
+            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+              {manualClientEntries.map((field) => (
+                <div
+                  key={`client-${field.key}`}
+                  className="rounded-lg border border-border/70 bg-white p-3"
+                >
+                  <div className="text-xs text-muted-foreground">{field.label}</div>
+                  <div className="mt-1 font-medium break-words">{field.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">
+              Datos del caso
+            </div>
+            {manualCaseEntries.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                No hay datos adicionales en este formulario.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                {manualCaseEntries.map((field) => (
+                  <div
+                    key={`case-${field.key}`}
+                    className="rounded-lg border border-border/70 bg-white p-3"
+                  >
+                    <div className="text-xs text-muted-foreground">{field.label}</div>
+                    <div className="mt-1 font-medium break-words whitespace-pre-wrap">
+                      {field.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -438,12 +807,21 @@ function AttorneyCaseDetailsSection({
 }
 
 function getCallPhoneNumber(call: any): string {
+  const manualData = getManualIntakeData(call);
   return firstText(
     call?.phoneNumber,
+    call?.leadPhone,
+    call?.phone,
+    getManualValueByKeyCandidates(
+      manualData,
+      ["phone", "phoneNumber", "callerPhone", "telefono", "tel", "cell", "cel", "mobile"],
+      { requirePhone: true }
+    ),
     call?.phone,
     call?.from_number,
     call?.analysis?.from_number,
-    call?.analysis?.post_call_data?.phone
+    call?.analysis?.post_call_data?.phone,
+    call?.analysis?.custom_analysis_data?.phone
   );
 }
 
@@ -452,8 +830,8 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "finalizado") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-900/30 dark:text-slate-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-slate-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-600" />
         Finalizado
       </span>
     );
@@ -461,8 +839,8 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "asignada") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700 dark:bg-green-950/30 dark:text-green-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800 dark:bg-green-900/40 dark:text-green-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-600" />
         Aceptada por abogado
       </span>
     );
@@ -470,16 +848,16 @@ function StatusBadge({ status }: { status?: string | null }) {
 
   if (s === "rechazada_por_abogado") {
     return (
-      <span className="inline-flex items-center gap-2 rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+      <span className="inline-flex items-center gap-2 rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-800 dark:bg-red-900/40 dark:text-red-200">
+        <span className="h-1.5 w-1.5 rounded-full bg-red-600" />
         Reasignar
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-700 dark:bg-yellow-950/30 dark:text-yellow-300">
-      <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
+    <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-600" />
       Pendiente
     </span>
   );
@@ -489,6 +867,8 @@ export default function AttorneyCall() {
   const ITEMS_PER_PAGE = 5;
   const [copiedCallKey, setCopiedCallKey] = useState<string | null>(null);
   const [closingCallKey, setClosingCallKey] = useState<string | null>(null);
+  const [selectedCall, setSelectedCall] = useState<any | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [activePage, setActivePage] = useState(1);
   const [finalizedPage, setFinalizedPage] = useState(1);
   const [openActiveSection, setOpenActiveSection] = useState(false);
@@ -578,6 +958,17 @@ export default function AttorneyCall() {
   }, [finalizedCalls, finalizedPage]);
 
   useEffect(() => {
+    if (!selectedCall) return;
+    const selectedKey = getCallKey(selectedCall);
+    if (!selectedKey) return;
+
+    const updated = calls.find((call: any) => getCallKey(call) === selectedKey);
+    if (updated) {
+      setSelectedCall(updated);
+    }
+  }, [calls, selectedCall]);
+
+  useEffect(() => {
     if (!callId) return;
     const targetCallId = String(callId);
 
@@ -589,6 +980,8 @@ export default function AttorneyCall() {
       setActivePage(page);
       setOpenActiveSection(true);
       setOpenFinalizedSection(false);
+      setSelectedCall(activeCalls[targetActiveIndex]);
+      setDetailsOpen(true);
       return;
     }
 
@@ -600,6 +993,8 @@ export default function AttorneyCall() {
       setFinalizedPage(page);
       setOpenFinalizedSection(true);
       setOpenActiveSection(false);
+      setSelectedCall(finalizedCalls[targetFinalizedIndex]);
+      setDetailsOpen(true);
     }
   }, [callId, activeCalls, finalizedCalls]);
 
@@ -645,15 +1040,15 @@ export default function AttorneyCall() {
     }
   }
 
-  function renderCaseCard(call: any, idx: number) {
+  function renderCaseDetail(call: any) {
     const callKey = getCallKey(call);
     const copied = copiedCallKey === callKey;
     const isFinalized = normalizeCaseStatus(call?.status) === "finalizado";
     const isClosing = closingCallKey === callKey;
-    const callPhone = getCallPhoneNumber(call);
+    const manual = isManualCall(call);
 
     return (
-      <Card key={callKey || String(call?.id ?? idx)} className="border-border/60 shadow-sm">
+      <Card className="border-border/60 shadow-sm">
         <CardHeader className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle className="text-xl">Detalle del caso</CardTitle>
@@ -683,21 +1078,24 @@ export default function AttorneyCall() {
               {formatDuration(call.duration)}
             </span>
 
-            {callPhone && (
+            {getCallPhoneNumber(call) && (
               <span className="flex items-center gap-1">
                 <Phone className="h-4 w-4 opacity-60" />
-                {callPhone}
+                {getCallPhoneNumber(call)}
               </span>
             )}
 
             <span className="flex items-center gap-1">
               <FileText className="h-4 w-4 opacity-60" />
-              {getCallSummary(call) ? "Con resumen" : "Sin resumen"}
+              {manual ? "Formulario manual" : getCallSummary(call) ? "Con resumen" : "Sin resumen"}
             </span>
           </div>
         </CardHeader>
 
         <CardContent>
+          {manual ? (
+            renderManualCallForm(call)
+          ) : (
           <Tabs defaultValue="resumen" className="w-full">
             <TabsList className="grid w-full grid-cols-4 rounded-xl">
               <TabsTrigger value="resumen" className="rounded-lg">
@@ -813,8 +1211,75 @@ export default function AttorneyCall() {
               </Card>
             </TabsContent>
           </Tabs>
+          )}
         </CardContent>
       </Card>
+    );
+  }
+
+  function renderCaseListItem(call: any, idx: number, toneOffset = 0) {
+    const callKey = getCallKey(call);
+    const manual = isManualCall(call);
+    const tinted = (idx + toneOffset) % 2 === 0;
+    const cardTone = tinted
+      ? "border-sky-200 bg-sky-50/70 hover:bg-sky-100/70"
+      : "border-border/60 bg-white hover:bg-slate-50/80";
+
+    return (
+      <button
+        key={callKey || String(call?.id ?? idx)}
+        type="button"
+        onClick={() => {
+          setSelectedCall(call);
+          setDetailsOpen(true);
+        }}
+        className="group block w-full text-left"
+      >
+        <Card className={`shadow-sm transition-colors ${cardTone}`}>
+          <CardContent className="p-5">
+            <div className="flex items-start gap-4">
+              <div className="min-w-0 flex-1 space-y-3">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="text-lg font-semibold text-foreground">
+                    {call?.leadName ?? "AI Lead"}
+                  </div>
+                  <StatusBadge status={call?.status} />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-4 w-4 opacity-60" />
+                    {formatDuration(call?.duration)}
+                  </span>
+
+                  {getCallPhoneNumber(call) && (
+                    <span className="flex items-center gap-1">
+                      <Phone className="h-4 w-4 opacity-60" />
+                      {getCallPhoneNumber(call)}
+                    </span>
+                  )}
+
+                  <span className="flex items-center gap-1">
+                    <FileText className="h-4 w-4 opacity-60" />
+                    {manual ? "Formulario manual" : getCallSummary(call) ? "Con resumen" : "Sin resumen"}
+                  </span>
+                </div>
+
+                <div className="text-sm text-foreground/75 line-clamp-2">
+                  {manual
+                    ? "Haz clic para ver el formulario completo del caso."
+                    : getCallSummary(call) || "Sin resumen disponible para este caso."}
+                </div>
+              </div>
+
+              <div className="ml-auto inline-flex shrink-0 items-center gap-2 self-start rounded-lg border border-sky-200 bg-white/80 px-3 py-2 text-xs font-semibold text-sky-800 transition-colors duration-200 group-hover:border-blue-400 group-hover:bg-blue-600 group-hover:text-white">
+                Ver detalles
+                <ChevronRight className="h-4 w-4" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </button>
     );
   }
 
@@ -955,7 +1420,11 @@ export default function AttorneyCall() {
                               </div>
                             ) : (
                               <>
-                                {activeCallsPage.map(renderCaseCard)}
+                                <div className="space-y-4">
+                                  {activeCallsPage.map((call: any, idx: number) =>
+                                    renderCaseListItem(call, idx, (activePage - 1) * ITEMS_PER_PAGE)
+                                  )}
+                                </div>
                                 <div className="flex items-center justify-end gap-3">
                                   <button
                                     type="button"
@@ -1012,7 +1481,15 @@ export default function AttorneyCall() {
                               </div>
                             ) : (
                               <>
-                                {finalizedCallsPage.map(renderCaseCard)}
+                                <div className="space-y-4">
+                                  {finalizedCallsPage.map((call: any, idx: number) =>
+                                    renderCaseListItem(
+                                      call,
+                                      idx,
+                                      activeCallsPage.length + (finalizedPage - 1) * ITEMS_PER_PAGE
+                                    )
+                                  )}
+                                </div>
                                 <div className="flex items-center justify-end gap-3">
                                   <button
                                     type="button"
@@ -1049,6 +1526,29 @@ export default function AttorneyCall() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={detailsOpen}
+        onOpenChange={(open) => {
+          setDetailsOpen(open);
+          if (!open) {
+            setSelectedCall(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-5xl max-h-[88vh] overflow-y-auto p-0">
+          <div className="p-6 pr-14">
+            <DialogHeader className="sr-only">
+              <DialogTitle>Detalle del caso</DialogTitle>
+            </DialogHeader>
+            {selectedCall ? (
+              renderCaseDetail(selectedCall)
+            ) : (
+              <div className="text-sm text-muted-foreground">Selecciona un caso.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

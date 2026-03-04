@@ -891,6 +891,9 @@ ${JSON.stringify(callsData, null, 2)}
           safeString(req.body?.notes).trim(),
           safeString((call as any)?.assignmentNotes).trim()
         ) ?? undefined;
+      const isManualCase =
+        retellCallId.startsWith("manual-") ||
+        safeString((call as any)?.direction).toLowerCase() === "manual";
 
       await sendAttorneyAssignmentEmail({
         to,
@@ -899,6 +902,7 @@ ${JSON.stringify(callsData, null, 2)}
         urgency,
         summary,
         notes,
+        isManualCase,
       });
       await storage.updateCallLogByRetellCallId(retellCallId, {
         assignmentStatus: "delivered",
@@ -1163,6 +1167,10 @@ ${JSON.stringify(callsData, null, 2)}
           (targetLog as any)?.urgency,
           (updatedLead as any)?.urgency
         ) ?? "Medium";
+      const isManualCase =
+        String((assignedCall as any)?.retellCallId ?? "").startsWith("manual-") ||
+        safeString((assignedCall as any)?.direction).toLowerCase() === "manual" ||
+        safeString((targetLog as any)?.direction).toLowerCase() === "manual";
       let mailSent = false;
       let mailError: string | null = null;
       try {
@@ -1175,6 +1183,7 @@ ${JSON.stringify(callsData, null, 2)}
           notes: assignmentNotes || undefined,
           acceptUrl,
           rejectUrl,
+          isManualCase,
         });
         mailSent = true;
       } catch (err: any) {

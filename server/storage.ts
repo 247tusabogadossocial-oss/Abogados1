@@ -214,10 +214,51 @@ export class ConvexStorage implements IStorage {
   async getCallLogs(): Promise<any[]> {
     const { client, api } = convexClient();
     const rows: any[] = await client.query(api.callLogs.listWithLead, {});
-    return rows.map((r) => ({
-      ...r,
-      createdAt: r.createdAt ? new Date(r.createdAt) : null,
-    }));
+    const manualLeadIds = Array.from(
+      new Set(
+        rows
+          .filter((row) => {
+            const retellCallId = String((row as any)?.retellCallId ?? "").trim();
+            const direction = String((row as any)?.direction ?? "").trim().toLowerCase();
+            const leadId = Number((row as any)?.leadId ?? 0);
+            return (
+              Number.isFinite(leadId) &&
+              leadId > 0 &&
+              (retellCallId.startsWith("manual-") || direction === "manual")
+            );
+          })
+          .map((row) => Number((row as any)?.leadId ?? 0))
+      )
+    );
+
+    const intakeEntries = await Promise.all(
+      manualLeadIds.map(async (leadId) => {
+        const intakes: any[] = await client.query(api.intakes.getByLeadId, { leadId });
+        const latestIntake =
+          [...(intakes ?? [])].sort(
+            (a: any, b: any) =>
+              Number(b?.updatedAt ?? b?.createdAt ?? 0) -
+              Number(a?.updatedAt ?? a?.createdAt ?? 0)
+          )[0] ?? null;
+        return [leadId, latestIntake] as const;
+      })
+    );
+
+    const intakeByLeadId = new Map<number, any>(intakeEntries);
+
+    return rows.map((r) => {
+      const leadId = Number((r as any)?.leadId ?? 0);
+      const intake = Number.isFinite(leadId) && leadId > 0 ? intakeByLeadId.get(leadId) : null;
+
+      return {
+        ...r,
+        intake: (r as any)?.intake ?? intake ?? null,
+        intakeData:
+          (r as any)?.intakeData ??
+          (intake && typeof intake?.data === "object" ? intake.data : null),
+        createdAt: r.createdAt ? new Date(r.createdAt) : null,
+      };
+    });
   }
 
   async createCallLog(log: InsertCallLog): Promise<CallLog> {

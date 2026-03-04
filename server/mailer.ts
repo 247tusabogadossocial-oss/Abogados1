@@ -10,6 +10,7 @@ type AssignmentEmail = {
   notes?: string;
   acceptUrl?: string;
   rejectUrl?: string;
+  isManualCase?: boolean;
 };
 
 type AssignmentDecisionEmail = {
@@ -21,7 +22,7 @@ type AssignmentDecisionEmail = {
 };
 
 type NewCallAlertEmail = {
-  to?: string; // si no llega, se usa NEW_CALL_ALERT_TO (o fallback al from)
+  to?: string | string[]; // si no llega, se usa NEW_CALL_ALERT_TO (o fallback al from)
   retellCallId: string;
   phoneNumber?: string | null;
   caseType?: string | null;
@@ -141,9 +142,12 @@ async function deliverEmail(input: {
 export async function sendAttorneyAssignmentEmail(data: AssignmentEmail) {
   // Evita asuntos agresivos (menos spam)
   const isValidationFlow = Boolean(data.acceptUrl || data.rejectUrl);
-  const subject = isValidationFlow
+  let subject = isValidationFlow
     ? `Caso para revisión: ${data.caseType ?? "General"}`
     : `Caso asignado: ${data.caseType ?? "General"}`;
+  if (isValidationFlow && data.isManualCase) {
+    subject = "Caso para revisi\u00F3n: FORMULARIO MANUAL";
+  }
 
   const title = isValidationFlow ? "Caso para revisión" : "Caso asignado";
   const intro = isValidationFlow
